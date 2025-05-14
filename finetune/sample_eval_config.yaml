@@ -1,0 +1,190 @@
+# Sample evaluation configuration file
+
+# Model configuration
+model:
+  model_name: "llava-hf/llava-1.5-7b-hf" 
+  use_gradient_checkpointing: "unsloth"
+  lora_r: 128
+  lora_alpha: 256
+  lora_dropout: 0
+  lora_bias: "none"
+  random_state: 3407
+  finetune_vision_layers: false
+  finetune_language_layers: true
+  finetune_attention_modules: true
+  finetune_mlp_modules: true
+
+# Training configuration (for reference)
+training:
+  dataset_name: "keplerccc/ManipulationVQA"
+  dataset_split: "train"
+  output_dir: "outputs"
+
+# Evaluation configuration
+evaluation:
+  max_test_samples: 2000
+  checkpoint_path: "/model_output"
+  test_split: "test"
+  
+  # Generation parameters
+  max_new_tokens: 50
+  temperature: 0.7
+  do_sample: true
+  
+  # Models to evaluate
+  models_to_evaluate:
+
+    # Fine-tuned models with their respective base models
+    # - type: "internal"
+    #   name: "qwen-finetuned"
+    #   is_finetuned: true
+    #   base_model_name: "Qwen/Qwen2.5-VL-7B-Instruct"  # Base model to use
+    #   checkpoint_path: "/model_output/qwen25_7b/checkpoint-742"
+
+    # - type: "internal"
+    #   name: "llava-finetuned"
+    #   is_finetuned: true
+    #   base_model_name: "llava-hf/llava-1.5-7b-hf"  # Base model to use
+    #   checkpoint_path: "/model_output/llava_7b/checkpoint-742"
+
+    # - type: "internal"
+    #   name: "qwen-10k"
+    #   is_finetuned: true
+    #   base_model_name: "Qwen/Qwen2.5-VL-7B-Instruct"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_qwen_10000/checkpoint-148"
+
+    # - type: "internal"
+    #   name: "qwen-20k"
+    #   is_finetuned: true
+    #   base_model_name: "Qwen/Qwen2.5-VL-7B-Instruct"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_qwen_20000/checkpoint-297"
+
+    # - type: "internal"
+    #   name: "qwen-30k"
+    #   is_finetuned: true
+    #   base_model_name: "Qwen/Qwen2.5-VL-7B-Instruct"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_qwen_30000/checkpoint-445"
+
+    # - type: "internal"
+    #   name: "qwen-40k"
+    #   is_finetuned: true
+    #   base_model_name: "Qwen/Qwen2.5-VL-7B-Instruct"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_qwen_40000/checkpoint-593"
+
+    # - type: "internal"
+    #   name: "qwen-50k"
+    #   is_finetuned: true
+    #   base_model_name: "Qwen/Qwen2.5-VL-7B-Instruct"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_qwen_50000/checkpoint-742"
+
+    - type: "internal"
+      name: "llama3.2-10k"
+      is_finetuned: true
+      base_model_name: "meta-llama/Llama-3.2-11B-Vision-Instruct"  # Base model to use
+      checkpoint_path: "/model_output/outputs/scale_llama32_10000/checkpoint-148"
+
+    - type: "internal"
+      name: "llama3.2-20k"
+      is_finetuned: true
+      base_model_name: "meta-llama/Llama-3.2-11B-Vision-Instruct"  # Base model to use
+      checkpoint_path: "/model_output/outputs/scale_llama32_20000/checkpoint-297"
+
+    # - type: "internal"
+    #   name: "llama3.2-30k"
+    #   is_finetuned: true
+    #   base_model_name: "meta-llama/Llama-3.2-11B-Vision-Instruct"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_llama32_30000/checkpoint-445"
+
+    - type: "internal"
+      name: "llama3.2-40k"
+      is_finetuned: true
+      base_model_name: "meta-llama/Llama-3.2-11B-Vision-Instruct"  # Base model to use
+      checkpoint_path: "/model_output/outputs/scale_llama32_40000/checkpoint-593"
+      
+
+    - type: "internal"
+      name: "llama3.2-50k"
+      is_finetuned: true
+      base_model_name: "meta-llama/Llama-3.2-11B-Vision-Instruct"  # Base model to use
+      checkpoint_path: "/model_output/outputs/scale_llama32_50000/checkpoint-742"
+      
+      
+      
+      
+
+    # - type: "internal"
+    #   name: "llava-10k"
+    #   is_finetuned: true
+    #   base_model_name: "llava-hf/llava-v1.6-mistral-7b-hf"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_llava16_10000/checkpoint-148"
+
+    # - type: "internal"
+    #   name: "llava-20k"
+    #   is_finetuned: true
+    #   base_model_name: "llava-hf/llava-v1.6-mistral-7b-hf"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_llava16_20000/checkpoint-297"
+
+    # - type: "internal"
+    #   name: "llava-30k"
+    #   is_finetuned: true
+    #   base_model_name: "llava-hf/llava-v1.6-mistral-7b-hf"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_llava16_30000/checkpoint-445"
+
+    # - type: "internal"
+    #   name: "llava-40k"
+    #   is_finetuned: true
+    #   base_model_name: "llava-hf/llava-v1.6-mistral-7b-hf"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_llava_40000/checkpoint-593"
+
+    # - type: "internal"
+    #   name: "llava-50k"
+    #   is_finetuned: true
+    #   base_model_name: "llava-hf/llava-v1.6-mistral-7b-hf"  # Base model to use
+    #   checkpoint_path: "/model_output/outputs/scale_llava16_50000/checkpoint-742"
+
+    # - type: "internal"
+    #   name: "llava-finetuned"
+    #   is_finetuned: true
+    #   base_model_name: "llava-hf/llava-1.5-7b-hf"  # Base model to use
+    #   checkpoint_path: "/model_output/llava_7b/checkpoint-742"
+
+
+    # Base models for comparison
+    # - type: "internal"
+    #   name: "Qwen"
+    #   model_name: "Qwen/Qwen2.5-VL-7B-Instruct"
+    #   is_finetuned: false
+      
+    # - type: "internal"
+    #   name: "llava"
+    #   model_name: "llava-hf/llava-1.5-7b-hf"
+    #   is_finetuned: false
+    
+    # - type: "internal"
+    #   name: "llama3.2"
+    #   model_name: "meta-llama/Llama-3.2-11B-Vision-Instruct"
+    #   is_finetuned: false
+
+    # - type: "internal"
+    #   name: "llama3.2-finetuned"
+    #   is_finetuned: true
+    #   base_model_name: "meta-llama/Llama-3.2-11B-Vision-Instruct"
+    #   checkpoint_path: "/model_output/llama_11b/checkpoint-742"
+      
+    # OpenAI model (GPT-4o)
+    # - type: "openai"
+    #   name: "GPT-4o"
+    #   model_name: "gpt-4o"
+      
+    # # Gemini model
+    # - type: "gemini" 
+    #   name: "Gemini Pro Vision"
+    #   model_name: "gemini-1.5-pro"
+
+# API configurations
+apis:
+  openai_api_key: ""
+  openai_model_name: "gpt-4o"
+  google_api_key: ""  # Add your Google API key here
+  gemini_model_name: "gemini-1.5-pro"
+  use_cache: true  # Cache results to avoid re-calling APIs unnecessarily 

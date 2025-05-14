@@ -1,0 +1,10 @@
+lora_model
+outputs
+qwen_vqa
+gemma3_output
+llama_11b_vqa
+gemma3_vqa
+unsloth_compiled_cache/*
+wandb
+unsloth_compiled_cache
+__pycache__
