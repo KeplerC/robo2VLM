@@ -1,4 +1,4 @@
-# Robo2VLM
+# Robo2VLM: Visual Question Answering from Large-Scale In-the-Wild Robot Manipulation Datasets
 
 This repository provides tools and resources for working with Visual Question Answering (VQA) datasets and models. It includes utilities for dataset creation, model finetuning, answer generation, and benchmarking.
 
