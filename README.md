@@ -1,6 +1,6 @@
 # Robo2VLM: Visual Question Answering from Large-Scale In-the-Wild Robot Manipulation Datasets
 
-🤖 **[Paper](https://arxiv.org/abs/2505.15517)** | 🤗 **[Dataset](https://huggingface.co/datasets/keplerccc/Robo2VLM-1)** | 💻 **[Website](https://keplerc.github.io/robo2vlm/)**
+🤖 **[Paper](https://arxiv.org/abs/2505.15517)** | 🤗 **[Dataset](https://huggingface.co/datasets/keplerccc/Robo2VLM-1)** | 💻 **[Website](https://berkeleyautomation.github.io/robo2vlm/)**
 
 ![Robo2VLM Overview](images/VQA-examples2.png)
 
