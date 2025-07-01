@@ -1,52 +1,119 @@
 # Robo2VLM: Visual Question Answering from Large-Scale In-the-Wild Robot Manipulation Datasets
 
-This repository provides tools and resources for working with Visual Question Answering (VQA) datasets and models. It includes utilities for dataset creation, model finetuning, answer generation, and benchmarking.
+🤖 **[Paper](https://arxiv.org/abs/2505.15517)** | 🤗 **[Dataset](https://huggingface.co/datasets/keplerccc/Robo2VLM-1)** | 💻 **[Website](https://keplerc.github.io/robo2vlm/)**
 
-## Overview
+![Robo2VLM Overview](images/VQA-examples2.png)
 
-The project is organized into several key components:
+Using real robot trajectory data to enhance and evaluate Vision-Language Models (VLMs) through grounded visual question answering.
 
-*   **Dataset Creation**: Scripts and documentation for creating and managing VQA datasets, particularly for use with the Hugging Face `datasets` library.
-*   **Model Finetuning**: (Placeholder for details on model finetuning capabilities)
-*   **Answer Generation**: (Placeholder for details on generating answers/predictions using VQA models)
-*   **Benchmarking**: (Placeholder for details on benchmarking VQA models or dataset performance)
+## 🔥 Features
 
-## VQA Dataset
+- **684,710 VQA questions** from 176K real robot trajectories
+- **463 distinct scenes** across diverse environments (office, lab, kitchen)
+- **3,396 manipulation tasks** with ground-truth from robot sensors
+- **Multi-modal reasoning** using spatial, goal-conditioned, and interaction templates
 
-A core part of this project is the VQA dataset, which is collected from multimodal trajectories.
+## 🚀 Quick Start
 
-### Dataset Structure
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
-The dataset generally includes the following fields:
+# Fine-tune a model
+cd finetune/
+python main.py --config configs/llama_vision.yaml
 
-*   `id`: Unique identifier for each VQA item
-*   `question`: The question text
-*   `choices`: List of possible answer choices
-*   `correct_answer_idx`: Index of the correct answer in the `choices` list
-*   `images`: List of question images (actual image data)
-*   `choice_images`: List of images associated with each answer choice (actual image data)
-*   `metadata`: Additional metadata about the VQA item (stored as a JSON string)
+# Generate VQA data (requires Docker)
+cd generation/
+docker build -t robo2vlm .
+docker run --gpus all -v $(pwd):/workspace robo2vlm
 
-For detailed information on the dataset and how to use it, please refer to `scripts/README_dataset.md`.
+# Evaluate models
+cd benchmark/
+python evaluation.py --model_name llama-3.2-vision
+```
 
-## Directory Structure
+## 📊 Dataset
 
-*   `benchmark/`: Contains scripts and resources for benchmarking VQA models and datasets.
-*   `doc/`: Intended for general project documentation.
-*   `finetune/`: Contains scripts and resources for finetuning VQA models.
-*   `generation/`: Contains scripts and resources for generating VQA outputs or predictions.
-*   `scripts/`: Contains utility scripts, primarily for dataset creation (e.g., `create_huggingface_dataset.py` and `README_dataset.md`).
+Our published dataset `keplerccc/ManipulationVQA` contains:
+- **684,710 VQA questions** from real robot trajectories
+- **15+ question types** covering spatial and interaction reasoning
+- **Multi-modal data** with RGB images, depth, robot states
 
-## Getting Started
+### Dataset Statistics
 
-1.  **Explore the Dataset**: Start by understanding the VQA dataset. Refer to `scripts/README_dataset.md` for details on its structure and usage.
-2.  **Dataset Creation**: If you need to create or modify VQA datasets, explore the scripts within the `scripts/` directory.
-3.  **Model Interaction**: For model finetuning, generation, or benchmarking, refer to the respective directories (`finetune/`, `generation/`, `benchmark/`). (Further documentation within these directories would be beneficial).
+![Dataset Statistics](images/data_stats.png)
 
-## Contributing
+*Distribution and key statistics of Robo2VLM-1 dataset. (Left) Robo2VLM-1 covers diverse scenes with the most frequent scenes in office (33.6%), lab (25.3%), and kitchen (16.9%). (Middle) Robo2VLM-1 covers tasks including common manipulation actions include pick (21.5%), put (20.6%), and move (9.9%). (Right) The table summarizes key dataset statistics including question characteristics, answer choices, and image resolutions.*
 
-(Placeholder for contribution guidelines)
+## 🛠️ Robo2VLM Pipeline
 
-## License
+![Robo2VLM Pipeline](images/robo2vlm_pipeline.png)
 
-(Placeholder for license information)
+Robo2VLM generates multi-modal real-world robot trajectories through (1) manipulation phase classification, (2) keyframe selection guided by scene and interaction cues, and (3) structured VQA question prototype.
+
+## 📁 Repository Structure
+
+- **`finetune/`** - Complete fine-tuning pipeline with LoRA, Unsloth optimization
+  - Supports Llama-3.2-Vision, Qwen2-VL, LLaVa models
+  - Configurable training with WandB integration
+- **`generation/`** - VQA data generation from robot trajectories  
+  - Docker environment with GPU acceleration
+  - 15+ question types (spatial, interaction, goal-conditioned)
+- **`benchmark/`** - Multi-model evaluation framework
+  - vLLM backend for efficient inference
+  - Comprehensive accuracy metrics and breakdowns
+- **`scripts/`** - HuggingFace dataset creation tools
+  - Ray-based parallel processing
+  - Direct integration with HF Hub
+
+## 🔧 VQA Question Types
+
+![Question Prototype](images/question-prototype.png)
+
+Our framework generates 15+ question categories:
+
+**Spatial Reasoning (S1-S8)**
+- Robot gripper state detection
+- Object reachability analysis  
+- Relative direction and depth perception
+- Multi-view correspondence
+
+**Interaction Reasoning (I1-I6)**
+- Task success evaluation
+- Grasp stability assessment
+- Goal configuration identification
+- Temporal sequence analysis
+
+## 🎯 Supported Models
+
+- **Llama-3.2-11B-Vision** (primary)
+- **Qwen2.5-VL** (7B/32B/72B)
+- **LLaVa** (1.5-7B, v1.6-34B, Next-72B)
+- **API models**: GPT-4o, Gemini Pro Vision
+
+## 📈 Results
+
+### Benchmark Performance
+
+![Benchmark Statistics](images/benchmark-stats.png)
+
+*Performance Comparison of Multimodal Foundation Models on OpenX-VQA Benchmark Categories (%). Upper part: zero-shot. Lower part: with CoT prompting.*
+
+### Fine-tuning Results
+
+![Fine-tuning Breakdown](images/finetune_breakdown.png)
+
+*Fine-tuning LLaVA 1.6 with increasing training data of robo2vlm-1 from 10k to 50k VQA items. Accuracy improvements almost all categories compared to no fine-tuning.*
+
+## 📄 Citation
+
+```bibtex
+@misc{chen2025robo2vlmvisualquestionanswering,
+    title={Robo2VLM: Visual Question Answering from Large-Scale In-the-Wild Robot Manipulation Datasets}, 
+    author={Kaiyuan Chen and Shuangyu Xie and Zehan Ma and Pannag Sanketi and Ken Goldberg},
+    year={2025},
+    eprint={2505.15517},
+    archivePrefix={arXiv},
+    primaryClass={cs.RO}
+}
