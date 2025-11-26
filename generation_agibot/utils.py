@@ -275,7 +275,8 @@ def resize_image(img: np.ndarray, max_size: int = 320) -> np.ndarray:
 
 
 def create_image_grid(images: List[np.ndarray], rows: int = 2, cols: int = 3,
-                      labels: Optional[List[str]] = None) -> np.ndarray:
+                      labels: Optional[List[str]] = None,
+                      max_cell_size: int = 320) -> np.ndarray:
     """
     Create a grid of images.
 
@@ -284,6 +285,7 @@ def create_image_grid(images: List[np.ndarray], rows: int = 2, cols: int = 3,
         rows: Number of rows
         cols: Number of columns
         labels: Optional labels for each image
+        max_cell_size: Maximum size for each cell's longest dimension (default 320)
 
     Returns:
         Grid image
@@ -291,12 +293,15 @@ def create_image_grid(images: List[np.ndarray], rows: int = 2, cols: int = 3,
     if not images:
         return None
 
-    # Resize all images to same size
-    target_h = max(img.shape[0] for img in images)
-    target_w = max(img.shape[1] for img in images)
+    # First resize each image to max_cell_size
+    resized_images = [resize_image(img, max_size=max_cell_size) for img in images]
+
+    # Then make all images the same size (use the max dimensions after resize)
+    target_h = max(img.shape[0] for img in resized_images)
+    target_w = max(img.shape[1] for img in resized_images)
 
     resized = []
-    for img in images:
+    for img in resized_images:
         if img.shape[0] != target_h or img.shape[1] != target_w:
             resized_img = cv2.resize(img, (target_w, target_h))
         else:
@@ -312,13 +317,13 @@ def create_image_grid(images: List[np.ndarray], rows: int = 2, cols: int = 3,
     # Add labels if provided
     if labels:
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 1.5
-        font_thickness = 3
+        font_scale = 0.5  # Reduced to 1/3 of original (was 1.5)
+        font_thickness = 1
         font_color = (0, 0, 255)  # Red
 
         for i, (img, label) in enumerate(zip(resized, labels)):
             if label:
-                cv2.putText(img, label, (30, 60), font, font_scale, font_color, font_thickness)
+                cv2.putText(img, label, (10, 20), font, font_scale, font_color, font_thickness)
 
     # Build grid
     grid_rows = []
@@ -331,16 +336,57 @@ def create_image_grid(images: List[np.ndarray], rows: int = 2, cols: int = 3,
     return np.vstack(grid_rows)
 
 
+def _calculate_temporal_grid_layout(num_images: int) -> Tuple[int, int]:
+    """
+    Calculate optimal grid layout (rows, cols) for temporal montages.
+
+    Args:
+        num_images: Number of images to arrange
+
+    Returns:
+        Tuple of (rows, cols)
+    """
+    import math
+
+    if num_images <= 0:
+        return (1, 1)
+    elif num_images == 1:
+        return (1, 1)
+    elif num_images == 2:
+        return (1, 2)
+    elif num_images == 3:
+        return (1, 3)  # 1x3 grid - all in same row
+    elif num_images == 4:
+        return (2, 2)
+    elif num_images == 5:
+        return (2, 3)  # 2x3 grid with one black cell
+    elif num_images == 6:
+        return (2, 3)
+    elif num_images <= 8:
+        return (2, 4)
+    elif num_images <= 9:
+        return (3, 3)
+    elif num_images <= 12:
+        return (3, 4)
+    else:
+        # For larger numbers, calculate near-square layout
+        cols = math.ceil(math.sqrt(num_images))
+        rows = math.ceil(num_images / cols)
+        return (rows, cols)
+
+
 def create_temporal_montage(frames: List[np.ndarray],
                             labels: Optional[List[str]] = None,
-                            max_width: int = 1920) -> np.ndarray:
+                            max_cell_size: int = 320) -> np.ndarray:
     """
-    Create a horizontal montage of frames showing temporal progression.
+    Create a grid montage of frames showing temporal progression.
+
+    Uses grid layouts (e.g., 2x2, 2x3) instead of single rows for better visualization.
 
     Args:
         frames: List of frames in temporal order
         labels: Optional labels for each frame
-        max_width: Maximum width of result
+        max_cell_size: Maximum size for each cell's longest dimension (default 320)
 
     Returns:
         Montage image
@@ -350,28 +396,49 @@ def create_temporal_montage(frames: List[np.ndarray],
 
     n_frames = len(frames)
 
-    # Calculate target width for each frame
-    sample_h, sample_w = frames[0].shape[:2]
-    target_w = min(sample_w, max_width // n_frames)
-    scale = target_w / sample_w
-    target_h = int(sample_h * scale)
+    # First resize each frame
+    resized_frames = [resize_image(frame, max_size=max_cell_size) for frame in frames]
+
+    # Make all frames the same size
+    target_h = max(img.shape[0] for img in resized_frames)
+    target_w = max(img.shape[1] for img in resized_frames)
 
     # Resize and annotate frames
     processed = []
-    for i, frame in enumerate(frames):
-        resized = cv2.resize(frame, (target_w, target_h))
+    for i, frame in enumerate(resized_frames):
+        if frame.shape[0] != target_h or frame.shape[1] != target_w:
+            resized = cv2.resize(frame, (target_w, target_h))
+        else:
+            resized = frame.copy()
 
         # Add frame number
         font = cv2.FONT_HERSHEY_SIMPLEX
         cv2.putText(resized, f"Frame {i+1}", (10, 30), font, 0.7, (255, 255, 0), 2)
 
         # Add label if provided
-        if labels and i < len(labels):
+        if labels and i < len(labels) and labels[i]:
             cv2.putText(resized, labels[i], (10, target_h - 10), font, 0.5, (255, 255, 255), 1)
 
         processed.append(resized)
 
-    return np.hstack(processed)
+    # Calculate grid layout
+    rows, cols = _calculate_temporal_grid_layout(n_frames)
+
+    # Pad with black images if needed
+    total_slots = rows * cols
+    while len(processed) < total_slots:
+        black = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        processed.append(black)
+
+    # Build grid
+    grid_rows = []
+    for r in range(rows):
+        start_idx = r * cols
+        end_idx = start_idx + cols
+        row_images = processed[start_idx:end_idx]
+        grid_rows.append(np.hstack(row_images))
+
+    return np.vstack(grid_rows)
 
 
 def add_text_overlay(img: np.ndarray, text: str,

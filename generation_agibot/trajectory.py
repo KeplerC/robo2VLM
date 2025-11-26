@@ -104,6 +104,7 @@ class AgiBotTrajectory:
         self._video_fps = None
         self._video_frame_count = None
         self._cached_frames = {}  # Cache decoded frames
+        self._all_frames = None  # All frames loaded sequentially
 
     def _load_metadata(self):
         """Load episode metadata from JSON file."""
@@ -278,6 +279,88 @@ class AgiBotTrajectory:
             print(f"Error decoding frame {frame_idx}: {e}")
             return None
 
+    def decode_all_frames(self) -> List[np.ndarray]:
+        """
+        Decode entire video sequentially (no seeking - very fast).
+
+        Returns:
+            List of BGR frames as numpy arrays (resized to max_frame_size)
+        """
+        if self._all_frames is not None:
+            return self._all_frames
+
+        video_path = self.get_video_path()
+        frames = []
+
+        # Try PyAV sequential decode (fastest for this use case)
+        if HAS_PYAV:
+            try:
+                container = av.open(str(video_path))
+                stream = container.streams.video[0]
+                stream.thread_type = 'AUTO'  # Enable threading
+
+                # Get video info
+                if stream.average_rate:
+                    self._video_fps = float(stream.average_rate)
+                else:
+                    self._video_fps = 30.0
+
+                for frame in container.decode(video=0):
+                    img = frame.to_ndarray(format='bgr24')
+                    img = self._resize_frame(img)
+                    frames.append(img)
+
+                container.close()
+                self._all_frames = frames
+                self._video_frame_count = len(frames)
+                return frames
+            except Exception as e:
+                print(f"PyAV decode failed: {e}")
+
+        # Fallback to Decord
+        if HAS_DECORD:
+            try:
+                vr = VideoReader(str(video_path), ctx=DEFAULT_DECORD_CTX)
+                self._video_fps = vr.get_avg_fps()
+                self._video_frame_count = len(vr)
+
+                for i in range(len(vr)):
+                    frame = vr[i].asnumpy()
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    frame = self._resize_frame(frame)
+                    frames.append(frame)
+
+                self._all_frames = frames
+                return frames
+            except Exception as e:
+                print(f"Decord decode failed: {e}")
+
+        return frames
+
+    def get_frame_from_preloaded(self, step_idx: int) -> Optional[np.ndarray]:
+        """
+        Get frame from preloaded frames (must call decode_all_frames first).
+
+        Args:
+            step_idx: Proprioceptive step index
+
+        Returns:
+            BGR frame or None
+        """
+        if self._all_frames is None:
+            return self.get_frame(step_idx)  # Fallback to old method
+
+        proprio_length = self.get_trajectory_length()
+        video_length = len(self._all_frames)
+
+        if proprio_length == 0 or video_length == 0:
+            return None
+
+        video_idx = int((step_idx / proprio_length) * video_length)
+        video_idx = min(video_idx, video_length - 1)
+
+        return self._all_frames[video_idx].copy()
+
     def close(self):
         """Release video resources."""
         if self._video_reader is not None:
@@ -291,6 +374,7 @@ class AgiBotTrajectory:
                     pass
             self._video_container = None
         self._cached_frames.clear()
+        self._all_frames = None  # Free memory
 
     def __del__(self):
         """Destructor to ensure resources are released."""
@@ -511,6 +595,7 @@ class AgiBotTrajectory:
         Get video frame at the given proprioceptive step index.
 
         Note: This maps proprioceptive step to video frame using relative position.
+        If decode_all_frames() was called first, uses preloaded frames (fast).
 
         Args:
             step_idx: Proprioceptive step index
@@ -518,6 +603,10 @@ class AgiBotTrajectory:
         Returns:
             BGR image as numpy array, or None if failed
         """
+        # Use preloaded frames if available (fast path)
+        if self._all_frames is not None:
+            return self.get_frame_from_preloaded(step_idx)
+
         self._init_video()
 
         # Map proprio step to video frame
