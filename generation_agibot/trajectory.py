@@ -16,13 +16,32 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Set, Tuple, Any
 
-# Try to import PyAV for AV1 video decoding
+# Try to import Decord for fast video decoding (GPU-accelerated)
+try:
+    import decord
+    from decord import VideoReader, gpu, cpu
+    HAS_DECORD = True
+    # Try to use GPU, fallback to CPU
+    try:
+        _test_ctx = gpu(0)
+        DEFAULT_DECORD_CTX = gpu(0)
+        print("Decord: Using GPU (NVDEC) for video decoding")
+    except Exception:
+        DEFAULT_DECORD_CTX = cpu(0)
+        print("Decord: Using CPU for video decoding (GPU not available)")
+except ImportError:
+    HAS_DECORD = False
+    DEFAULT_DECORD_CTX = None
+    print("Warning: Decord not installed. Install with: pip install decord")
+
+# Fallback to PyAV for AV1 video decoding
 try:
     import av
     HAS_PYAV = True
 except ImportError:
     HAS_PYAV = False
-    print("Warning: PyAV not installed. Video decoding may fail for AV1 videos.")
+    if not HAS_DECORD:
+        print("Warning: Neither Decord nor PyAV installed. Video decoding will fail.")
 
 
 @dataclass
@@ -58,7 +77,7 @@ class AgiBotTrajectory:
     - Video frames from head_color camera
     """
 
-    def __init__(self, task_id: int, episode_id: int, data_root: str):
+    def __init__(self, task_id: int, episode_id: int, data_root: str, max_frame_size: int = 320):
         """
         Initialize trajectory from AgiBotWorld dataset.
 
@@ -66,10 +85,12 @@ class AgiBotTrajectory:
             task_id: Task identifier (e.g., 327, 352, etc.)
             episode_id: Episode identifier within the task
             data_root: Root directory of the AgiBotWorld dataset
+            max_frame_size: Maximum size for the longest dimension of frames (default 320)
         """
         self.task_id = task_id
         self.episode_id = episode_id
         self.data_root = Path(data_root)
+        self.max_frame_size = max_frame_size
 
         # Load metadata
         self._load_metadata()
@@ -77,8 +98,9 @@ class AgiBotTrajectory:
         # Load proprioceptive data
         self._load_proprio()
 
-        # Video container (lazy loaded) - using PyAV for AV1 support
-        self._video_container = None
+        # Video reader (lazy loaded) - prefer Decord for GPU acceleration
+        self._video_reader = None  # Decord VideoReader
+        self._video_container = None  # PyAV fallback
         self._video_fps = None
         self._video_frame_count = None
         self._cached_frames = {}  # Cache decoded frames
@@ -135,12 +157,24 @@ class AgiBotTrajectory:
         self._proprio_length = len(self._proprio['timestamps'])
 
     def _init_video(self):
-        """Initialize video container using PyAV for AV1 support."""
-        if self._video_container is not None:
+        """Initialize video reader using Decord (GPU) or PyAV fallback."""
+        if self._video_reader is not None or self._video_container is not None:
             return
 
         video_path = self.get_video_path()
 
+        # Try Decord first (faster, supports GPU)
+        if HAS_DECORD:
+            try:
+                self._video_reader = VideoReader(str(video_path), ctx=DEFAULT_DECORD_CTX)
+                self._video_fps = self._video_reader.get_avg_fps()
+                self._video_frame_count = len(self._video_reader)
+                return
+            except Exception as e:
+                print(f"Decord failed to open video: {e}, falling back to PyAV")
+                self._video_reader = None
+
+        # Fallback to PyAV
         if HAS_PYAV:
             try:
                 self._video_container = av.open(str(video_path))
@@ -166,8 +200,49 @@ class AgiBotTrajectory:
             self._video_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1000
             cap.release()
 
+    def _resize_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Resize frame so longest side is max_frame_size."""
+        if self.max_frame_size is None or self.max_frame_size <= 0:
+            return frame
+
+        h, w = frame.shape[:2]
+        if max(h, w) <= self.max_frame_size:
+            return frame
+
+        if h > w:
+            new_h = self.max_frame_size
+            new_w = int(w * (self.max_frame_size / h))
+        else:
+            new_w = self.max_frame_size
+            new_h = int(h * (self.max_frame_size / w))
+
+        return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    def _decode_frame_decord(self, frame_idx: int) -> Optional[np.ndarray]:
+        """Decode a specific frame using Decord (fast random access, GPU support)."""
+        if not HAS_DECORD or self._video_reader is None:
+            return None
+
+        # Check cache first
+        if frame_idx in self._cached_frames:
+            return self._cached_frames[frame_idx].copy()
+
+        try:
+            # Decord supports efficient random access
+            frame = self._video_reader[frame_idx].asnumpy()
+            # Decord returns RGB, convert to BGR for OpenCV compatibility
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            # Resize frame
+            frame = self._resize_frame(frame)
+            # Cache the frame
+            self._cached_frames[frame_idx] = frame
+            return frame.copy()
+        except Exception as e:
+            print(f"Error decoding frame {frame_idx} with Decord: {e}")
+            return None
+
     def _decode_frame_pyav(self, frame_idx: int) -> Optional[np.ndarray]:
-        """Decode a specific frame using PyAV."""
+        """Decode a specific frame using PyAV with timestamp-based seeking."""
         if not HAS_PYAV or self._video_container is None:
             return None
 
@@ -176,23 +251,27 @@ class AgiBotTrajectory:
             return self._cached_frames[frame_idx].copy()
 
         try:
-            # Seek to frame and decode
             stream = self._video_container.streams.video[0]
+            fps = self._video_fps or 30.0
+            time_base = stream.time_base
 
-            # Reset to beginning and seek
-            self._video_container.seek(0)
+            # Calculate target timestamp
+            target_pts = int(frame_idx / fps / time_base)
 
-            current_frame = 0
+            # Seek to nearest keyframe before target
+            self._video_container.seek(target_pts, stream=stream, backward=True, any_frame=False)
+
+            # Decode frames until we reach target
             for frame in self._video_container.decode(video=0):
-                if current_frame == frame_idx:
+                current_idx = int(float(frame.pts * time_base) * fps)
+                if current_idx >= frame_idx:
                     # Convert to numpy array (BGR for OpenCV compatibility)
                     img = frame.to_ndarray(format='bgr24')
+                    # Resize frame
+                    img = self._resize_frame(img)
                     # Cache the frame
                     self._cached_frames[frame_idx] = img
                     return img.copy()
-                current_frame += 1
-                if current_frame > frame_idx:
-                    break
 
             return None
         except Exception as e:
@@ -201,6 +280,9 @@ class AgiBotTrajectory:
 
     def close(self):
         """Release video resources."""
+        if self._video_reader is not None:
+            # Decord VideoReader doesn't need explicit close
+            self._video_reader = None
         if self._video_container is not None:
             if HAS_PYAV:
                 try:
@@ -460,14 +542,18 @@ class AgiBotTrajectory:
             video_frame_idx: Video frame index
 
         Returns:
-            BGR image as numpy array, or None if failed
+            BGR image as numpy array (resized to max_frame_size), or None if failed
         """
         self._init_video()
 
-        if HAS_PYAV and self._video_container is not None:
+        # Try Decord first (faster, GPU support)
+        if HAS_DECORD and self._video_reader is not None:
+            return self._decode_frame_decord(video_frame_idx)
+        # Fallback to PyAV
+        elif HAS_PYAV and self._video_container is not None:
             return self._decode_frame_pyav(video_frame_idx)
         else:
-            # Fallback - unlikely to work for AV1
+            # No decoder available
             return None
 
     def get_keyframes(self, num_frames: int = 5) -> List[Tuple[int, np.ndarray]]:
@@ -539,7 +625,8 @@ class AgiBotTrajectory:
 
 
 def load_trajectory(task_id: int, episode_id: int,
-                   data_root: str = "/shared/projects/agibot/agibot_alpha_full") -> AgiBotTrajectory:
+                   data_root: str = "/shared/projects/agibot/agibot_alpha_full",
+                   max_frame_size: int = 320) -> AgiBotTrajectory:
     """
     Convenience function to load a trajectory.
 
@@ -547,11 +634,12 @@ def load_trajectory(task_id: int, episode_id: int,
         task_id: Task identifier
         episode_id: Episode identifier
         data_root: Root directory of dataset
+        max_frame_size: Maximum size for the longest dimension of frames (default 320)
 
     Returns:
         AgiBotTrajectory instance
     """
-    return AgiBotTrajectory(task_id, episode_id, data_root)
+    return AgiBotTrajectory(task_id, episode_id, data_root, max_frame_size=max_frame_size)
 
 
 def get_all_episodes(task_id: int,

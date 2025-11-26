@@ -248,13 +248,13 @@ def get_skill_description(skill: str, target_object: Optional[str] = None) -> st
 
 # ==================== Image Processing Utilities ====================
 
-def resize_image(img: np.ndarray, max_size: int = 640) -> np.ndarray:
+def resize_image(img: np.ndarray, max_size: int = 320) -> np.ndarray:
     """
     Resize image while maintaining aspect ratio.
 
     Args:
         img: Input image
-        max_size: Maximum dimension
+        max_size: Maximum dimension (default 320 for longest side)
 
     Returns:
         Resized image
@@ -271,7 +271,7 @@ def resize_image(img: np.ndarray, max_size: int = 640) -> np.ndarray:
         new_w = max_size
         new_h = int(h * (max_size / w))
 
-    return cv2.resize(img, (new_w, new_h))
+    return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
 def create_image_grid(images: List[np.ndarray], rows: int = 2, cols: int = 3,

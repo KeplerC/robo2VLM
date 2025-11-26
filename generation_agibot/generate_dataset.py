@@ -83,7 +83,8 @@ def generate_vqas_for_episode(task_id: int,
                               data_root: str,
                               output_dir: str,
                               state_samples: int = 1,
-                              segment_samples: int = 5) -> List[Dict]:
+                              segment_samples: int = 5,
+                              sample_rate: float = 1.0) -> List[Dict]:
     """
     Generate VQAs for a single episode.
 
@@ -94,6 +95,7 @@ def generate_vqas_for_episode(task_id: int,
         output_dir: Output directory for saving images
         state_samples: Samples for robot state VQAs
         segment_samples: Samples for segment/trajectory VQAs
+        sample_rate: Probability of keeping each VQA (0.0 to 1.0)
 
     Returns:
         List of VQA dictionaries (serialized)
@@ -107,14 +109,17 @@ def generate_vqas_for_episode(task_id: int,
         )
         trajectory.close()
 
-        # Save images to output directory
+        # Randomly sample VQAs and only save images for selected ones
         images_dir = os.path.join(output_dir, "images")
         os.makedirs(images_dir, exist_ok=True)
-        for vqa in vqas:
-            vqa.save_images(images_dir)
 
-        # Convert to dictionaries for serialization
-        return [vqa.to_dict() for vqa in vqas]
+        selected_vqas = []
+        for vqa in vqas:
+            if random.random() < sample_rate:
+                vqa.save_images(images_dir)
+                selected_vqas.append(vqa.to_dict())
+
+        return selected_vqas
     except Exception as e:
         print(f"Error processing episode {task_id}/{episode_id}: {e}")
         return []
@@ -128,7 +133,8 @@ if HAS_RAY:
                                       data_root: str,
                                       output_dir: str,
                                       state_samples: int = 1,
-                                      segment_samples: int = 5) -> Tuple[int, int, List[Dict]]:
+                                      segment_samples: int = 5,
+                                      sample_rate: float = 1.0) -> Tuple[int, int, List[Dict]]:
         """
         Ray remote function for generating VQAs.
 
@@ -136,7 +142,7 @@ if HAS_RAY:
             Tuple of (task_id, episode_id, list of VQA dicts)
         """
         vqa_dicts = generate_vqas_for_episode(
-            task_id, episode_id, data_root, output_dir, state_samples, segment_samples
+            task_id, episode_id, data_root, output_dir, state_samples, segment_samples, sample_rate
         )
         return (task_id, episode_id, vqa_dicts)
 
@@ -146,7 +152,8 @@ def generate_vqas_parallel(episodes: List[Tuple[int, int]],
                           output_dir: str,
                           state_samples: int,
                           segment_samples: int,
-                          num_workers: int) -> List[Dict]:
+                          num_workers: int,
+                          sample_rate: float = 1.0) -> List[Dict]:
     """
     Generate VQAs in parallel using Ray.
 
@@ -157,6 +164,7 @@ def generate_vqas_parallel(episodes: List[Tuple[int, int]],
         state_samples: Samples for robot state VQAs
         segment_samples: Samples for segment/trajectory VQAs
         num_workers: Number of parallel workers
+        sample_rate: Probability of keeping each VQA (0.0 to 1.0)
 
     Returns:
         List of all VQA dictionaries
@@ -175,7 +183,7 @@ def generate_vqas_parallel(episodes: List[Tuple[int, int]],
     futures = []
     for task_id, episode_id in episodes:
         future = generate_vqas_for_episode_ray.remote(
-            task_id, episode_id, data_root, output_dir, state_samples, segment_samples
+            task_id, episode_id, data_root, output_dir, state_samples, segment_samples, sample_rate
         )
         futures.append(future)
 
@@ -207,7 +215,8 @@ def generate_vqas_sequential(episodes: List[Tuple[int, int]],
                             data_root: str,
                             output_dir: str,
                             state_samples: int,
-                            segment_samples: int) -> List[Dict]:
+                            segment_samples: int,
+                            sample_rate: float = 1.0) -> List[Dict]:
     """
     Generate VQAs sequentially (fallback when Ray not available).
 
@@ -217,6 +226,7 @@ def generate_vqas_sequential(episodes: List[Tuple[int, int]],
         output_dir: Output directory for saving images
         state_samples: Samples for robot state VQAs
         segment_samples: Samples for segment/trajectory VQAs
+        sample_rate: Probability of keeping each VQA (0.0 to 1.0)
 
     Returns:
         List of all VQA dictionaries
@@ -229,7 +239,7 @@ def generate_vqas_sequential(episodes: List[Tuple[int, int]],
 
     for task_id, episode_id in tqdm(episodes, desc="Generating VQAs"):
         vqa_dicts = generate_vqas_for_episode(
-            task_id, episode_id, data_root, output_dir, state_samples, segment_samples
+            task_id, episode_id, data_root, output_dir, state_samples, segment_samples, sample_rate
         )
         if vqa_dicts:
             all_vqa_dicts.extend(vqa_dicts)
@@ -334,6 +344,13 @@ def main():
     )
 
     parser.add_argument(
+        "--total-vqas",
+        type=int,
+        default=140000,
+        help="Target total number of VQAs to save (will randomly sample during generation)"
+    )
+
+    parser.add_argument(
         "--no-parallel",
         action="store_true",
         help="Disable parallel processing (run sequentially)"
@@ -357,7 +374,7 @@ def main():
         # Default: sample a few common tasks
         task_ids = [327, 352, 356, 362, 377, 380]
 
-    print(f"Processing {len(task_ids)} tasks: {task_ids[:10]}{'...' if len(task_ids) > 10 else ''}")
+    print(f"Processing {len(task_ids)} tasks: {task_ids}")
 
     # Sample episodes
     episodes = sample_episodes(
@@ -372,7 +389,14 @@ def main():
     # Generate VQAs
     use_parallel = HAS_RAY and not args.no_parallel
 
+    # Calculate sample rate to achieve target total VQAs
+    # Estimate VQAs per episode: ~3 state types * state_samples + ~4 segment types * segment_samples
+    estimated_vqas_per_episode = 3 * args.state_samples + 4 * args.segment_samples
+    total_estimated_vqas = len(episodes) * estimated_vqas_per_episode
+    sample_rate = min(1.0, args.total_vqas / total_estimated_vqas) if total_estimated_vqas > 0 else 1.0
+
     print(f"Sampling: state_samples={args.state_samples}, segment_samples={args.segment_samples}")
+    print(f"Target VQAs: {args.total_vqas}, Estimated total: {total_estimated_vqas}, Sample rate: {sample_rate:.4f}")
 
     if use_parallel:
         print(f"Using Ray with {args.num_workers} workers")
@@ -382,7 +406,8 @@ def main():
             args.output_dir,
             args.state_samples,
             args.segment_samples,
-            args.num_workers
+            args.num_workers,
+            sample_rate
         )
     else:
         if not args.no_parallel and not HAS_RAY:
@@ -392,7 +417,8 @@ def main():
             args.data_root,
             args.output_dir,
             args.state_samples,
-            args.segment_samples
+            args.segment_samples,
+            sample_rate
         )
 
     # Count by type
@@ -408,6 +434,8 @@ def main():
         "num_episodes": len(episodes),
         "num_workers": args.num_workers if use_parallel else 1,
         "parallel": use_parallel,
+        "target_vqas": args.total_vqas,
+        "sample_rate": sample_rate,
         "stats": {
             "total_episodes": len(episodes),
             "total_vqas": len(all_vqa_dicts),
@@ -423,8 +451,10 @@ def main():
     print("VQA Generation Summary")
     print("=" * 50)
     print(f"Processing mode: {'Parallel (Ray)' if use_parallel else 'Sequential'}")
-    print(f"Total episodes processed: {len(episodes)}")
-    print(f"Total VQAs generated: {len(all_vqa_dicts)}")
+    print(f"Total episodes (trajectories) processed: {len(episodes)}")
+    print(f"Target VQAs: {args.total_vqas}")
+    print(f"Actual VQAs saved: {len(all_vqa_dicts)}")
+    print(f"Sample rate used: {sample_rate:.4f}")
     print("\nVQAs by type:")
     for tag, count in sorted(type_counts.items()):
         print(f"  {tag}: {count}")
