@@ -87,12 +87,16 @@ def process_single_item(args):
         tag = item.get('metadata', {}).get('tag', 'unknown')
         unique_id = f"agibot_{tag}_{idx}"
 
+        # Extract hint if available
+        hint = item.get('hint', '')
+
         return {
             'id': unique_id,
             'question': question,
             'choices': choices,
             'correct_answer': correct_answer,
             'image': {'bytes': image_bytes},
+            'hint': hint,
             '_split': 'train',
             '_source': 'agibot'
         }
@@ -143,6 +147,8 @@ def merge_and_push():
     # Load HuggingFace dataset
     hf_df = load_hf_parquet_files()
     hf_df['_source'] = 'manipulationvqa'
+    # Add empty hints column for HuggingFace data (doesn't have hints)
+    hf_df['hint'] = ''
 
     # Convert local dataset
     local_df = convert_local_vqa_to_hf_format()
@@ -165,13 +171,23 @@ def merge_and_push():
     print("\nShuffling all data...")
     merged_df = merged_df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-    # Split into train, validation, test (5k test, 5k val, rest train)
-    test_size = 5000
+    # Split into train, validation, test (100k train, 5k val, 5k test)
+    train_size = 100000
     val_size = 5000
+    test_size = 5000
+    total_required = train_size + val_size + test_size
 
-    test_df = merged_df.iloc[:test_size]
-    val_df = merged_df.iloc[test_size:test_size + val_size]
-    train_df = merged_df.iloc[test_size + val_size:]
+    if len(merged_df) < total_required:
+        print(f"\nWarning: Only {len(merged_df)} samples available, need {total_required}")
+        print("Adjusting splits proportionally...")
+        ratio = len(merged_df) / total_required
+        train_size = int(train_size * ratio)
+        val_size = int(val_size * ratio)
+        test_size = len(merged_df) - train_size - val_size
+
+    train_df = merged_df.iloc[:train_size]
+    val_df = merged_df.iloc[train_size:train_size + val_size]
+    test_df = merged_df.iloc[train_size + val_size:train_size + val_size + test_size]
 
     print(f"\nTrain split: {len(train_df)} rows")
     print(f"Validation split: {len(val_df)} rows")
@@ -192,6 +208,7 @@ def merge_and_push():
         'question': Value('string'),
         'choices': Sequence(Value('string')),
         'correct_answer': Value('string'),
+        'hint': Value('string'),
     })
 
     # Convert train, val, and test in parallel

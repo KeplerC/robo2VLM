@@ -99,14 +99,23 @@ Format your response as:
 </answer>"""
 
 
-def build_prompt(question: str, choices: List[str], correct_answer: str) -> str:
-    """Build the user prompt for a single VQA item with the correct answer."""
+def build_prompt(question: str, choices: List[str], correct_answer: str, hint: str = "") -> str:
+    """Build the user prompt for a single VQA item with the correct answer and optional hint."""
     choice_letters = ['A', 'B', 'C', 'D', 'E']
     formatted_choices = []
     for i, choice in enumerate(choices):
         if i < len(choice_letters):
             formatted_choices.append(f"{choice_letters[i]}. {choice}")
     choices_text = "\n".join(formatted_choices)
+
+    # Include hint section if hint is provided
+    hint_section = ""
+    if hint and hint.strip():
+        hint_section = f"""
+Context and Hints:
+{hint}
+
+"""
 
     return f"""Look at this image and generate reasoning for the following question.
 
@@ -116,8 +125,10 @@ Choices:
 {choices_text}
 
 The correct answer is: {correct_answer}
-
-Please think about this question as if you were a human pondering deeply. Engage in an internal dialogue using expressions such as "let me think", "wait", "Hmm", "oh, I see", "let's break it down", etc. Include self-reflection or verification in your reasoning process. Explain step by step why {correct_answer} is the correct answer."""
+{hint_section}
+Please think about this question as if you were a human pondering deeply. 
+Include self-reflection or verification in your reasoning process. 
+Explain step by step why {correct_answer} is the correct answer."""
 
 
 # ============================================================================
@@ -226,15 +237,23 @@ class SGLangReasoningClient:
         question: str,
         choices: List[str],
         correct_answer: str,
+        hint: str = "",
     ) -> Tuple[str, str, float]:
         """
         Generate reasoning for an image-question pair given the correct answer.
+
+        Args:
+            image: The image to analyze
+            question: The question text
+            choices: List of answer choices
+            correct_answer: The correct answer letter
+            hint: Optional hint with task context and reasoning guidance
 
         Returns:
             Tuple of (reasoning, answer, response_time)
         """
         image_base64 = self._encode_image(image)
-        prompt = build_prompt(question, choices, correct_answer)
+        prompt = build_prompt(question, choices, correct_answer, hint)
 
         messages = [
             {"role": "system", "content": COT_SYSTEM_PROMPT},
@@ -312,12 +331,14 @@ def process_single_item(
 ) -> Dict:
     """Process a single dataset item."""
     correct_answer = item.get('correct_answer', '')
+    hint = item.get('hint', '')  # Extract hint if available
 
     reasoning, answer, elapsed = client.generate_reasoning(
         image=item['image'],
         question=item['question'],
         choices=item['choices'],
         correct_answer=correct_answer,
+        hint=hint,
     )
 
     return {

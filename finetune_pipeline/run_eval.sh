@@ -52,7 +52,7 @@ CONDA_ENV="unsloth_env"
 #######################
 
 FILTER_DATASET=""
-MAX_SAMPLES=""
+MAX_SAMPLES="500"
 
 while [[ $# -gt 0 ]]; do
     case $1 in

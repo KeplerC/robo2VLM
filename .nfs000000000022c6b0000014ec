@@ -42,9 +42,7 @@ REASONING_DATASET_PATH="/home/syx/robo2VLM/reasoning_dataset"
 REASONING_SERVER_URL="http://localhost:30000/v1"
 REASONING_MODEL="Qwen/Qwen2.5-VL-72B-Instruct"
 REASONING_WORKERS=16
-MAX_TRAIN_SAMPLES=50000
-REASONING_TP=4  # Tensor parallelism (number of GPUs for the model)
-REASONING_SERVER_LOG="/home/syx/robo2VLM/reasoning_pipeline/server.log"
+MAX_TRAIN_SAMPLES=100000
 
 # Conda environment
 CONDA_ENV="robodm"
@@ -150,53 +148,6 @@ check_reasoning_server() {
     return 0
 }
 
-wait_for_reasoning_server() {
-    local max_attempts=120  # 10 minutes max wait (120 * 5 seconds)
-    local attempt=0
-
-    log "Waiting for reasoning server to be ready..."
-
-    while [ $attempt -lt $max_attempts ]; do
-        if check_reasoning_server; then
-            log "Reasoning server is ready!"
-            return 0
-        fi
-        attempt=$((attempt + 1))
-        if [ $((attempt % 12)) -eq 0 ]; then
-            log "Still waiting for server... (${attempt}/${max_attempts})"
-        fi
-        sleep 5
-    done
-
-    error "Reasoning server did not start within timeout (10 minutes)"
-}
-
-start_reasoning_server() {
-    log "Starting reasoning server in background..."
-    log "Model: $REASONING_MODEL"
-    log "TP: $REASONING_TP GPUs"
-    log "Server log: $REASONING_SERVER_LOG"
-
-    cd /home/syx/robo2VLM/reasoning_pipeline
-
-    # Start server in background
-    # --mem-fraction-static 0.65 allows for unbalanced GPU memory across nodes
-    CUDA_VISIBLE_DEVICES=4,5,6,7 nohup python3 -m sglang.launch_server \
-        --model-path "$REASONING_MODEL" \
-        --host "0.0.0.0" \
-        --port 30000 \
-        --tp "$REASONING_TP" \
-        --trust-remote-code \
-        --mem-fraction-static 0.65 \
-        > "$REASONING_SERVER_LOG" 2>&1 &
-
-    SERVER_PID=$!
-    log "Server started with PID: $SERVER_PID"
-
-    # Wait for server to be ready
-    wait_for_reasoning_server
-}
-
 step_generate_reasoning() {
     log "=========================================="
     log "STEP 3: Generating Chain-of-Thought reasoning"
@@ -206,13 +157,12 @@ step_generate_reasoning() {
         error "Merged dataset not found at: $MERGED_DATASET_PATH"
     fi
 
-    # Check if reasoning server is running, start if not
+    # Check if reasoning server is running
     if ! check_reasoning_server; then
-        log "Reasoning server not running at $REASONING_SERVER_URL"
-        log "Starting server automatically..."
-        start_reasoning_server
-    else
-        log "Reasoning server already running at $REASONING_SERVER_URL"
+        log "Warning: Reasoning server not running at $REASONING_SERVER_URL"
+        log "Please start the server first with:"
+        log "  cd /home/syx/robo2VLM/reasoning_pipeline && ./launch_server.sh"
+        error "Reasoning server not available"
     fi
 
     log "Server: $REASONING_SERVER_URL"
