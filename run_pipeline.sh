@@ -1,16 +1,12 @@
 #!/bin/bash
 #
-# VQA Dataset Pipeline: Generation -> Merge -> Reasoning -> Upload
+# VQA Dataset Pipeline: Generate -> Sample -> Reasoning -> Merge -> Save
 #
 # Usage:
-#   ./run_pipeline.sh                    # Run full pipeline (with reasoning)
-#   ./run_pipeline.sh --no-reasoning     # Run without reasoning step
+#   ./run_pipeline.sh                    # Run full pipeline
 #   ./run_pipeline.sh --generate-only    # Only generate VQA data
-#   ./run_pipeline.sh --merge-only       # Only merge datasets
-#   ./run_pipeline.sh --reasoning-only   # Only generate reasoning
-#   ./run_pipeline.sh --push-only        # Only push existing local dataset
-#
-# Configuration can be modified in the CONFIGURATION section below
+#   ./run_pipeline.sh --merge-only       # Sample, reason, merge (skip VQA generation)
+#   ./run_pipeline.sh --skip-reasoning   # Skip reasoning generation
 #
 
 set -e  # Exit on error
@@ -30,20 +26,21 @@ STATE_SAMPLES=1
 SEGMENT_SAMPLES=5
 TOTAL_VQAS=50000
 
-# HuggingFace settings
+# HuggingFace source
 HF_SOURCE_REPO="keplerccc/ManipulationVQA-60k"
-HF_TARGET_REPO="keplerccc/robo2vlm-2"
 
-# Local merged dataset path
-MERGED_DATASET_PATH="/home/syx/robo2VLM/merged_dataset"
+# Output path
+MERGED_DATASET_PATH="/home/syx/robo2VLM/merged_dataset2"
 
-# Reasoning pipeline settings
-REASONING_DATASET_PATH="/home/syx/robo2VLM/reasoning_dataset"
+# Sampling settings
+MANIPULATION_SAMPLES=16065 # Samples from ManipulationVQA-60k
+AGIBOT_SAMPLES=10000        # Samples from local Agibot VQA
+
+# Reasoning settings
 REASONING_SERVER_URL="http://localhost:30000/v1"
 REASONING_MODEL="Qwen/Qwen2.5-VL-72B-Instruct"
 REASONING_WORKERS=16
-MAX_TRAIN_SAMPLES=50000
-REASONING_TP=4  # Tensor parallelism (number of GPUs for the model)
+REASONING_TP=8
 REASONING_SERVER_LOG="/home/syx/robo2VLM/reasoning_pipeline/server.log"
 
 # Conda environment
@@ -62,87 +59,6 @@ error() {
     exit 1
 }
 
-check_hf_login() {
-    log "Checking HuggingFace authentication..."
-    if ! hf auth whoami &>/dev/null; then
-        error "Not logged in to HuggingFace. Run: hf auth login"
-    fi
-    log "HuggingFace authentication OK"
-}
-
-#######################
-# PIPELINE STEPS
-#######################
-
-step_generate_vqa() {
-    log "=========================================="
-    log "STEP 1: Generating VQA data from Agibot"
-    log "=========================================="
-
-    log "Data root: $AGIBOT_DATA_ROOT"
-    log "Output dir: $AGIBOT_VQA_OUTPUT"
-    log "Num episodes: $NUM_EPISODES"
-    log "Num workers: $NUM_WORKERS"
-    log "Target VQAs: $TOTAL_VQAS"
-
-    cd /home/syx/robo2VLM/generation_agibot
-
-    python generate_dataset.py \
-        --data-root "$AGIBOT_DATA_ROOT" \
-        --output-dir "$AGIBOT_VQA_OUTPUT" \
-        --all-tasks \
-        --num-episodes "$NUM_EPISODES" \
-        --num-workers "$NUM_WORKERS" \
-        --state-samples "$STATE_SAMPLES" \
-        --segment-samples "$SEGMENT_SAMPLES" \
-        --total-vqas "$TOTAL_VQAS"
-
-    log "VQA generation complete!"
-    log "Output saved to: $AGIBOT_VQA_OUTPUT"
-}
-
-step_merge_and_push() {
-    log "=========================================="
-    log "STEP 2: Merging datasets and pushing to HuggingFace"
-    log "=========================================="
-
-    check_hf_login
-
-    log "Merging:"
-    log "  - HuggingFace source: $HF_SOURCE_REPO"
-    log "  - Local Agibot VQA: $AGIBOT_VQA_OUTPUT"
-    log "Target repo: $HF_TARGET_REPO"
-
-    cd /home/syx/robo2VLM
-
-    python merge_datasets.py
-
-    log "Merge and push complete!"
-    log "Dataset available at: https://huggingface.co/datasets/$HF_TARGET_REPO"
-}
-
-step_push_only() {
-    log "=========================================="
-    log "Pushing existing local dataset to HuggingFace"
-    log "=========================================="
-
-    check_hf_login
-
-    if [ ! -d "$MERGED_DATASET_PATH" ]; then
-        error "Local dataset not found at: $MERGED_DATASET_PATH"
-    fi
-
-    log "Local dataset: $MERGED_DATASET_PATH"
-    log "Target repo: $HF_TARGET_REPO"
-
-    cd /home/syx/robo2VLM
-
-    python merge_datasets.py --push-only
-
-    log "Push complete!"
-    log "Dataset available at: https://huggingface.co/datasets/$HF_TARGET_REPO"
-}
-
 check_reasoning_server() {
     if ! curl -s "${REASONING_SERVER_URL}/models" > /dev/null 2>&1; then
         return 1
@@ -151,7 +67,7 @@ check_reasoning_server() {
 }
 
 wait_for_reasoning_server() {
-    local max_attempts=120  # 10 minutes max wait (120 * 5 seconds)
+    local max_attempts=120
     local attempt=0
 
     log "Waiting for reasoning server to be ready..."
@@ -175,79 +91,113 @@ start_reasoning_server() {
     log "Starting reasoning server in background..."
     log "Model: $REASONING_MODEL"
     log "TP: $REASONING_TP GPUs"
-    log "Server log: $REASONING_SERVER_LOG"
 
     cd /home/syx/robo2VLM/reasoning_pipeline
 
-    # Start server in background
-    # --mem-fraction-static 0.65 allows for unbalanced GPU memory across nodes
-    CUDA_VISIBLE_DEVICES=4,5,6,7 nohup python3 -m sglang.launch_server \
+    nohup python3 -m sglang.launch_server \
         --model-path "$REASONING_MODEL" \
         --host "0.0.0.0" \
         --port 30000 \
         --tp "$REASONING_TP" \
         --trust-remote-code \
-        --mem-fraction-static 0.65 \
+        --mem-fraction-static 0.8 \
         > "$REASONING_SERVER_LOG" 2>&1 &
 
     SERVER_PID=$!
     log "Server started with PID: $SERVER_PID"
 
-    # Wait for server to be ready
     wait_for_reasoning_server
 }
 
-step_generate_reasoning() {
+#######################
+# PIPELINE STEPS
+#######################
+
+step_generate_vqa() {
     log "=========================================="
-    log "STEP 3: Generating Chain-of-Thought reasoning"
+    log "STEP 1: Generating VQA data from Agibot"
     log "=========================================="
 
-    if [ ! -d "$MERGED_DATASET_PATH" ]; then
-        error "Merged dataset not found at: $MERGED_DATASET_PATH"
-    fi
+    log "Data root: $AGIBOT_DATA_ROOT"
+    log "Output dir: $AGIBOT_VQA_OUTPUT"
+    log "Num episodes: $NUM_EPISODES"
+    log "Target VQAs: $TOTAL_VQAS"
 
-    # Check if reasoning server is running, start if not
+    cd /home/syx/robo2VLM/generation_agibot
+
+    python generate_dataset.py \
+        --data-root "$AGIBOT_DATA_ROOT" \
+        --output-dir "$AGIBOT_VQA_OUTPUT" \
+        --all-tasks \
+        --num-episodes "$NUM_EPISODES" \
+        --num-workers "$NUM_WORKERS" \
+        --state-samples "$STATE_SAMPLES" \
+        --segment-samples "$SEGMENT_SAMPLES" \
+        --total-vqas "$TOTAL_VQAS"
+
+    log "VQA generation complete!"
+}
+
+step_sample_reason_merge() {
+    log "=========================================="
+    log "STEP 2: Sample -> Reasoning -> Merge"
+    log "=========================================="
+
+    log "ManipulationVQA samples: $MANIPULATION_SAMPLES"
+    log "Agibot VQA samples: $AGIBOT_SAMPLES"
+    log "Output: $MERGED_DATASET_PATH"
+
+    # Start reasoning server if needed
     if ! check_reasoning_server; then
-        log "Reasoning server not running at $REASONING_SERVER_URL"
-        log "Starting server automatically..."
+        log "Starting reasoning server..."
         start_reasoning_server
     else
-        log "Reasoning server already running at $REASONING_SERVER_URL"
+        log "Reasoning server already running"
     fi
 
-    log "Server: $REASONING_SERVER_URL"
-    log "Model: $REASONING_MODEL"
-    log "Input dataset: $MERGED_DATASET_PATH"
-    log "Output dataset: $REASONING_DATASET_PATH"
-    log "Max train samples: $MAX_TRAIN_SAMPLES"
-    log "Workers: $REASONING_WORKERS"
+    cd /home/syx/robo2VLM
 
-    cd /home/syx/robo2VLM/reasoning_pipeline
-
-    python generate_reasoning.py \
+    python merge_and_reason.py \
+        --local-vqa-path "$AGIBOT_VQA_OUTPUT" \
+        --hf-source-repo "$HF_SOURCE_REPO" \
+        --manipulation-samples "$MANIPULATION_SAMPLES" \
+        --agibot-samples "$AGIBOT_SAMPLES" \
+        --output "$MERGED_DATASET_PATH" \
         --server-url "$REASONING_SERVER_URL" \
         --model "$REASONING_MODEL" \
-        --input "$MERGED_DATASET_PATH" \
-        --output "$REASONING_DATASET_PATH" \
-        --num-workers "$REASONING_WORKERS" \
-        --max-train-samples "$MAX_TRAIN_SAMPLES"
+        --num-workers "$REASONING_WORKERS"
 
-    log "Reasoning generation complete!"
-    log "Output saved to: $REASONING_DATASET_PATH"
+    log "Pipeline complete! Output: $MERGED_DATASET_PATH"
+}
+
+step_sample_merge_only() {
+    log "=========================================="
+    log "Sample and Merge (no reasoning)"
+    log "=========================================="
+
+    cd /home/syx/robo2VLM
+
+    python merge_and_reason.py \
+        --local-vqa-path "$AGIBOT_VQA_OUTPUT" \
+        --hf-source-repo "$HF_SOURCE_REPO" \
+        --manipulation-samples "$MANIPULATION_SAMPLES" \
+        --agibot-samples "$AGIBOT_SAMPLES" \
+        --output "$MERGED_DATASET_PATH" \
+        --skip-reasoning
+
+    log "Complete! Output: $MERGED_DATASET_PATH"
 }
 
 show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --generate-only     Only generate VQA data (skip merge/reasoning)"
-    echo "  --merge-only        Only merge datasets (skip generation/reasoning)"
-    echo "  --reasoning-only    Only generate reasoning (requires merged dataset)"
-    echo "  --push-only         Only push existing local dataset"
-    echo "  --no-reasoning      Run pipeline without reasoning step"
-    echo "  --help              Show this help message"
+    echo "  --generate-only    Only generate VQA data"
+    echo "  --merge-only       Sample, reason, merge (skip VQA generation)"
+    echo "  --skip-reasoning   Sample and merge without reasoning"
+    echo "  --help             Show this help"
     echo ""
-    echo "Default (no options): generate -> merge -> reasoning -> upload"
+    echo "Default: generate -> sample -> reasoning -> merge"
 }
 
 #######################
@@ -259,8 +209,7 @@ main() {
     log "VQA Dataset Pipeline"
     log "=========================================="
 
-    # Activate conda environment
-    log "Activating conda environment: $CONDA_ENV"
+    # Activate conda
     source ~/miniconda3/etc/profile.d/conda.sh
     conda activate "$CONDA_ENV"
 
@@ -269,17 +218,11 @@ main() {
             step_generate_vqa
             ;;
         --merge-only)
-            step_merge_and_push
+            step_sample_reason_merge
             ;;
-        --reasoning-only)
-            step_generate_reasoning
-            ;;
-        --push-only)
-            step_push_only
-            ;;
-        --no-reasoning)
+        --skip-reasoning)
             step_generate_vqa
-            step_merge_and_push
+            step_sample_merge_only
             ;;
         --help|-h)
             show_usage
@@ -287,8 +230,7 @@ main() {
             ;;
         full|"")
             step_generate_vqa
-            step_merge_and_push
-            step_generate_reasoning
+            step_sample_reason_merge
             ;;
         *)
             error "Unknown option: $1. Use --help for usage."
@@ -296,7 +238,7 @@ main() {
     esac
 
     log "=========================================="
-    log "Pipeline completed successfully!"
+    log "Pipeline completed!"
     log "=========================================="
 }
 
