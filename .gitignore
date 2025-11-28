@@ -14,6 +14,10 @@ dist/
 downloads/
 eggs/
 .eggs/
+finetune_pipeline/logs
+finetune_pipeline/unsloth_compiled_cache
+finetune_pipeline/outputs
+finetune_pipeline/wandb
 lib/
 lib64/
 parts/

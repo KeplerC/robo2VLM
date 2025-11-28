@@ -1,0 +1,10 @@
+unsloth
+trl
+datasets
+transformers
+torch
+wandb
+pillow
+tqdm
+numpy
+scikit-learn
