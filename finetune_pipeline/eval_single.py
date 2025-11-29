@@ -143,24 +143,71 @@ def format_sample(sample, dataset_name: str):
         raise ValueError(f"Unknown dataset format. Columns: {columns}")
 
 
-def check_answer(model_response: str, correct_answer: str) -> bool:
-    """Check if model response matches correct answer."""
-    response = model_response.strip().upper()
+import re
+
+
+def extract_cot_answer(model_response: str) -> str:
+    """Extract answer from CoT format response (<think>...</think><answer>...</answer>)."""
+    # Try to extract from <answer> tags
+    answer_match = re.search(r'<answer>\s*([A-E])\s*</answer>', model_response, re.IGNORECASE)
+    if answer_match:
+        return answer_match.group(1).upper()
+
+    # Fallback: look for answer patterns after </think>
+    after_think = model_response.split('</think>')[-1] if '</think>' in model_response else model_response
+
+    # Try common patterns
+    patterns = [
+        r"(?:the answer is|my answer is|final answer is|correct answer is)[:\s]*\(?([A-E])\)?",
+        r"(?:answer|option)[:\s]*\(?([A-E])\)?",
+        r"\*\*([A-E])\*\*",
+        r"^([A-E])[.\s]",  # Answer at start of line
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, after_think, re.IGNORECASE | re.MULTILINE)
+        if match:
+            return match.group(1).upper()
+
+    # Last resort: find any standalone letter
+    letters = re.findall(r'\b([A-E])\b', after_think.upper())
+    if letters:
+        return letters[-1]
+
+    return ""
+
+
+def check_answer(model_response: str, correct_answer: str, mode: str = "zero_shot") -> bool:
+    """Check if model response matches correct answer.
+
+    Args:
+        model_response: Raw model output
+        correct_answer: Expected correct answer letter
+        mode: "zero_shot" or "cot" - determines how to extract answer from response
+    """
     correct = correct_answer.strip().upper()
 
-    # Direct match
-    if response == correct:
-        return True
+    if mode == "cot":
+        # Extract answer from CoT format
+        extracted = extract_cot_answer(model_response)
+        return extracted == correct
+    else:
+        # Zero-shot mode: original logic
+        response = model_response.strip().upper()
 
-    # Check if response starts with correct letter (e.g., "A. xxx")
-    if response and correct and response[0] == correct[0]:
-        return True
+        # Direct match
+        if response == correct:
+            return True
 
-    # Check if correct answer is contained in response
-    if correct in response:
-        return True
+        # Check if response starts with correct letter (e.g., "A. xxx")
+        if response and correct and response[0] == correct[0]:
+            return True
 
-    return False
+        # Check if correct answer is contained in response
+        if correct in response:
+            return True
+
+        return False
 
 
 def evaluate(
@@ -169,14 +216,23 @@ def evaluate(
     dataset_name: str,
     output_file: str,
     max_samples: Optional[int] = None,
+    mode: str = "zero_shot",
 ):
-    """Evaluate model on dataset."""
+    """Evaluate model on dataset.
+
+    Args:
+        mode: "zero_shot" or "cot" - determines answer extraction method and max_new_tokens
+    """
     print(f"\n{'='*60}")
     print(f"Model: {model_name or checkpoint_path}")
+    print(f"Mode: {mode}")
     print(f"Dataset: {dataset_name}")
     print(f"Output: {output_file}")
     print(f"GPU: {os.environ.get('CUDA_VISIBLE_DEVICES', 'all')}")
     print(f"{'='*60}\n")
+
+    # Set max_new_tokens based on mode
+    max_new_tokens = 2048 if mode == "cot" else 128
 
     # Load model
     if checkpoint_path:
@@ -210,12 +266,22 @@ def evaluate(
                 continue
 
             # Create message
+            question_text = formatted["question"]
+            if mode == "cot":
+                # Add CoT instruction to match training format
+                question_text = (
+                    f"{formatted['question']}\n"
+                    "Think step by step about this question. "
+                    "Put your reasoning inside <think>...</think> tags, "
+                    "then provide your final answer inside <answer>...</answer> tags."
+                )
+
             messages = [
                 {
                     "role": "user",
                     "content": [
                         {"type": "image"},
-                        {"type": "text", "text": formatted["question"]},
+                        {"type": "text", "text": question_text},
                     ]
                 }
             ]
@@ -246,7 +312,7 @@ def evaluate(
             with torch.no_grad():
                 output_ids = model.generate(
                     **inputs,
-                    max_new_tokens=128,
+                    max_new_tokens=max_new_tokens,
                     temperature=0.0,
                     do_sample=False,
                     use_cache=True,
@@ -259,7 +325,7 @@ def evaluate(
             ).strip()
 
             # Check answer
-            is_correct = check_answer(response, formatted["correct_answer"])
+            is_correct = check_answer(response, formatted["correct_answer"], mode=mode)
             if is_correct:
                 correct_count += 1
 
@@ -285,6 +351,7 @@ def evaluate(
         "model": model_name or checkpoint_path,
         "checkpoint": checkpoint_path,
         "dataset": dataset_name,
+        "mode": mode,
         "total_samples": len(results),
         "correct": correct_count,
         "accuracy": accuracy,
@@ -314,6 +381,9 @@ def main():
                         help="Dataset to evaluate on")
     parser.add_argument("--output-file", type=str, required=True, help="Output JSON file")
     parser.add_argument("--max-samples", type=int, help="Max samples to evaluate")
+    parser.add_argument("--mode", type=str, default="zero_shot",
+                        choices=["zero_shot", "cot"],
+                        help="Evaluation mode: zero_shot (direct answer) or cot (chain-of-thought)")
 
     args = parser.parse_args()
 
@@ -326,6 +396,7 @@ def main():
         dataset_name=args.dataset,
         output_file=args.output_file,
         max_samples=args.max_samples,
+        mode=args.mode,
     )
 
 

@@ -27,16 +27,16 @@ NUM_GPUS=8
 MODELS=(
     "Qwen/Qwen2.5-VL-3B-Instruct:1"
     "Qwen/Qwen2.5-VL-7B-Instruct:2"
-    "meta-llama/Llama-3.2-11B-Vision-Instruct:2"
-      "google/gemma-3-4b-it:1"      # Add this
-      "google/gemma-3-12b-it:2"     # Add this
+    # "meta-llama/Llama-3.2-11B-Vision-Instruct:2"
+    "google/gemma-3-4b-it:1"      # Add this
+    "google/gemma-3-12b-it:2"     # Add this
 )
 
 # Checkpoint intervals (save checkpoint after processing this many samples)
-CHECKPOINT_INTERVALS="10000,20000,30000,40000,50000,60000,70000,80000,90000,100000"
+CHECKPOINT_INTERVALS="10000,15000,20000"
 
 # Max samples to train on
-MAX_SAMPLES=100000
+MAX_SAMPLES=20000
 
 # Output directory
 OUTPUT_DIR="outputs"
@@ -50,6 +50,9 @@ CONDA_ENV="unsloth_env"
 
 # Wandb
 USE_WANDB=true
+
+# Training mode: zero_shot or cot
+MODE="cot"
 
 #######################
 # PARSE ARGUMENTS
@@ -78,6 +81,10 @@ while [[ $# -gt 0 ]]; do
             USE_WANDB=false
             shift
             ;;
+        --mode)
+            MODE="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Parallel Training Script"
             echo ""
@@ -91,6 +98,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --max-samples N        Max training samples (default: 100000)"
             echo "  --models \"m1:g1 m2:g2\" Space-separated model list"
             echo "  --no-wandb             Disable wandb logging"
+            echo "  --mode MODE            Training mode: zero_shot or cot (default: zero_shot)"
             exit 0
             ;;
         *)
@@ -234,6 +242,7 @@ run_training_job() {
         --max-samples "$MAX_SAMPLES" \
         --checkpoint-intervals "$CHECKPOINT_INTERVALS" \
         --output-dir "$OUTPUT_DIR" \
+        --mode "$MODE" \
         $wandb_flag \
         > "$log_file" 2>&1 &
 
@@ -269,6 +278,7 @@ main() {
     log "Parallel Training Pipeline"
     log "=============================================="
     log "Models: ${#MODELS[@]}"
+    log "Mode: $MODE"
     log "Checkpoint intervals: $CHECKPOINT_INTERVALS"
     log "Max samples: $MAX_SAMPLES"
     log "GPUs: $NUM_GPUS"

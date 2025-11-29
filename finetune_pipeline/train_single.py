@@ -50,8 +50,13 @@ DATASET_PATH = "/home/syx/robo2VLM/merged_dataset"
 DEFAULT_INTERVALS = [10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000, 90000, 100000]
 
 
-def convert_to_conversation(sample):
-    """Convert a VQA sample to conversation format."""
+def convert_to_conversation(sample, mode: str = "zero_shot"):
+    """Convert a VQA sample to conversation format.
+
+    Args:
+        sample: Dataset sample with question, choices, correct_answer, image, and reasoning
+        mode: "zero_shot" for direct answer, "cot" for chain-of-thought with reasoning
+    """
     question = sample["question"]
     choices = sample["choices"]
     correct_answer = sample["correct_answer"]
@@ -63,7 +68,23 @@ def convert_to_conversation(sample):
     for i, choice in enumerate(choices):
         formatted_question += f"{chr(65 + i)}. {choice}\n"
 
-    answer = f"{correct_answer}. {choices[correct_idx]}"
+    if mode == "cot":
+        # Add CoT instruction to prompt
+        formatted_question += (
+            "\nThink step by step about this question. "
+            "Put your reasoning inside <think>...</think> tags, "
+            "then provide your final answer inside <answer>...</answer> tags."
+        )
+        # Chain-of-thought mode: use reasoning from dataset
+        reasoning = sample.get("reasoning", "")
+        if reasoning and not reasoning.startswith("ERROR"):
+            answer = f"<think>\n{reasoning}\n</think>\n<answer>\n{correct_answer}\n</answer>"
+        else:
+            # Fallback to zero-shot format if no reasoning available
+            answer = f"{correct_answer}. {choices[correct_idx]}"
+    else:
+        # Zero-shot mode: direct answer
+        answer = f"{correct_answer}. {choices[correct_idx]}"
 
     return {
         "messages": [
@@ -137,13 +158,22 @@ def train(
     max_samples: int,
     checkpoint_intervals: list,
     output_dir: str,
-    use_wandb: bool = True
+    use_wandb: bool = True,
+    mode: str = "zero_shot"
 ):
-    """Train a model, saving checkpoints at specified intervals."""
+    """Train a model, saving checkpoints at specified intervals.
+
+    Args:
+        mode: "zero_shot" for direct answer training, "cot" for chain-of-thought reasoning
+    """
     model_slug = get_slug(model_name)
+    # Add mode suffix to distinguish checkpoints
+    if mode == "cot":
+        model_slug = f"{model_slug}_cot"
 
     print(f"\n{'='*60}")
     print(f"Training: {model_name}")
+    print(f"Mode: {mode}")
     print(f"Max samples: {max_samples}")
     print(f"Checkpoint intervals: {checkpoint_intervals}")
     print(f"Output: {output_dir}/{model_slug}/")
@@ -202,8 +232,8 @@ def train(
     print(f"Training samples: {len(train_dataset)}")
 
     # Convert to conversation format
-    print("Converting to conversation format...")
-    train_data = [convert_to_conversation(s) for s in tqdm(train_dataset, desc="Converting")]
+    print(f"Converting to conversation format (mode={mode})...")
+    train_data = [convert_to_conversation(s, mode=mode) for s in tqdm(train_dataset, desc="Converting")]
 
     # Small validation set
     val_data = train_data[:100]
@@ -214,7 +244,7 @@ def train(
     # Initialize wandb
     if use_wandb:
         run_name = f"{model_slug}_train"
-        wandb.init(project="finetune-pipeline", name=run_name)
+        wandb.init(project="finetune-pipeline", name=run_name, config={"mode": mode})
 
     # Calculate steps for checkpoints
     batch_size = TRAINING_CONFIG["per_device_train_batch_size"]
@@ -317,6 +347,9 @@ def main():
                         help="Output directory")
     parser.add_argument("--no-wandb", action="store_true",
                         help="Disable wandb")
+    parser.add_argument("--mode", type=str, default="zero_shot",
+                        choices=["zero_shot", "cot"],
+                        help="Training mode: zero_shot (direct answer) or cot (chain-of-thought)")
 
     args = parser.parse_args()
 
@@ -329,6 +362,7 @@ def main():
         checkpoint_intervals=intervals,
         output_dir=args.output_dir,
         use_wandb=not args.no_wandb,
+        mode=args.mode,
     )
 
 

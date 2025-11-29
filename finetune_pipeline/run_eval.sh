@@ -27,16 +27,16 @@ NUM_GPUS=8
 MODELS=(
     "Qwen/Qwen2.5-VL-3B-Instruct:1"
     "Qwen/Qwen2.5-VL-7B-Instruct:2"
-    "meta-llama/Llama-3.2-11B-Vision-Instruct:2"
-      "google/gemma-3-4b-it:1"      # Add this
-      "google/gemma-3-12b-it:2"     # Add this
+    # "meta-llama/Llama-3.2-11B-Vision-Instruct:2"
+    "google/gemma-3-4b-it:1"      # Add this
+    "google/gemma-3-12b-it:2"     # Add this
 )
 
 # Training sample sizes (0 = base model)
-SAMPLE_SIZES=(0 10000 20000 30000 40000 50000 60000 70000 80000 90000 100000)
+SAMPLE_SIZES=(0 5000 10000 15000 20000)
 
 # Test datasets
-DATASETS=("merged_dataset" "ERQA" "CV-Bench")
+DATASETS=("merged_dataset" "ERQA")
 
 # Directories
 OUTPUT_DIR="outputs"
@@ -46,6 +46,9 @@ mkdir -p "$LOG_DIR" "$RESULTS_DIR"
 
 # Conda environment
 CONDA_ENV="unsloth_env"
+
+# Evaluation mode: zero_shot or cot
+MODE="cot"
 
 #######################
 # PARSE ARGUMENTS
@@ -72,6 +75,10 @@ while [[ $# -gt 0 ]]; do
             IFS=' ' read -ra MODELS <<< "$2"
             shift 2
             ;;
+        --mode)
+            MODE="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Parallel Evaluation Script"
             echo ""
@@ -82,6 +89,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --samples 0,10000,...  Comma-separated sample sizes to evaluate"
             echo "  --max-samples N        Max samples per evaluation"
             echo "  --models \"m1:g1 m2:g2\" Space-separated model list"
+            echo "  --mode MODE            Evaluation mode: zero_shot or cot (default: zero_shot)"
             exit 0
             ;;
         *)
@@ -177,9 +185,15 @@ run_eval_job() {
     local gpu_id="$4"
 
     local slug=$(get_slug "$model_name")
+    # Add mode suffix for cot checkpoints and results
+    local slug_with_mode="$slug"
+    if [[ "$MODE" == "cot" ]]; then
+        slug_with_mode="${slug}_cot"
+    fi
+
     local ds_slug=$(get_dataset_slug "$dataset")
-    local result_file="$RESULTS_DIR/${slug}_${num_samples}samples_${ds_slug}.json"
-    local log_file="$LOG_DIR/${slug}_${num_samples}samples_${ds_slug}.log"
+    local result_file="$RESULTS_DIR/${slug_with_mode}_${num_samples}samples_${ds_slug}.json"
+    local log_file="$LOG_DIR/${slug_with_mode}_${num_samples}samples_${ds_slug}.log"
 
     # Build command
     local cmd="python eval_single.py"
@@ -188,18 +202,18 @@ run_eval_job() {
         # Base model
         cmd="$cmd --model \"$model_name\""
     else
-        # Finetuned model
-        local checkpoint="$OUTPUT_DIR/$slug/${num_samples}samples/checkpoint-final"
+        # Finetuned model - use slug_with_mode for checkpoint path
+        local checkpoint="$OUTPUT_DIR/$slug_with_mode/${num_samples}samples/checkpoint-final"
         cmd="$cmd --checkpoint \"$checkpoint\""
     fi
 
-    cmd="$cmd --dataset \"$dataset\" --output-file \"$result_file\""
+    cmd="$cmd --dataset \"$dataset\" --output-file \"$result_file\" --mode \"$MODE\""
 
     if [[ -n "$MAX_SAMPLES" ]]; then
         cmd="$cmd --max-samples $MAX_SAMPLES"
     fi
 
-    log "Starting eval: $model_name ($num_samples samples) on $dataset [GPU $gpu_id]"
+    log "Starting eval: $model_name ($num_samples samples, mode=$MODE) on $dataset [GPU $gpu_id]"
 
     CUDA_VISIBLE_DEVICES="$gpu_id" eval $cmd > "$log_file" 2>&1 &
 
@@ -229,6 +243,7 @@ main() {
     log "Parallel Evaluation Pipeline"
     log "=============================================="
     log "Models: ${#MODELS[@]}"
+    log "Mode: $MODE"
     log "Sample sizes: ${SAMPLE_SIZES[*]}"
     log "Datasets: ${DATASETS[*]}"
     log "GPUs: $NUM_GPUS"
@@ -244,24 +259,29 @@ main() {
     for model_str in "${MODELS[@]}"; do
         model_name=$(parse_model "$model_str")
         slug=$(get_slug "$model_name")
+        # Add mode suffix for cot checkpoints and results
+        slug_with_mode="$slug"
+        if [[ "$MODE" == "cot" ]]; then
+            slug_with_mode="${slug}_cot"
+        fi
 
         for samples in "${SAMPLE_SIZES[@]}"; do
             # For non-zero samples, check if checkpoint exists
             if [[ "$samples" -ne 0 ]]; then
-                checkpoint="$OUTPUT_DIR/$slug/${samples}samples/checkpoint-final"
+                checkpoint="$OUTPUT_DIR/$slug_with_mode/${samples}samples/checkpoint-final"
                 if [[ ! -d "$checkpoint" ]]; then
-                    log "Skipping (no checkpoint): $model_name with $samples samples"
+                    log "Skipping (no checkpoint): $model_name with $samples samples (mode=$MODE)"
                     continue
                 fi
             fi
 
             for dataset in "${DATASETS[@]}"; do
                 ds_slug=$(get_dataset_slug "$dataset")
-                result_file="$RESULTS_DIR/${slug}_${samples}samples_${ds_slug}.json"
+                result_file="$RESULTS_DIR/${slug_with_mode}_${samples}samples_${ds_slug}.json"
 
                 # Skip if result already exists
                 if [[ -f "$result_file" ]]; then
-                    log "Skipping (exists): $model_name ($samples) on $dataset"
+                    log "Skipping (exists): $model_name ($samples, mode=$MODE) on $dataset"
                     continue
                 fi
 
