@@ -1,60 +1,49 @@
 #!/usr/bin/env python3
 """
-Evaluate a single checkpoint on a single dataset.
+Evaluate a single checkpoint on the parking benchmark.
 Designed to be run as a standalone process with CUDA_VISIBLE_DEVICES set.
 
 Usage:
     # Evaluate finetuned model
-    CUDA_VISIBLE_DEVICES=0 python eval_single.py \
+    CUDA_VISIBLE_DEVICES=0 python eval_parking.py \
         --checkpoint outputs/Qwen_Qwen2.5-VL-3B-Instruct/10000samples/checkpoint-final \
-        --dataset merged_dataset \
-        --output-file results/Qwen_3B_10k_merged.json
+        --output-file results_parking/Qwen_3B_10k.json
 
     # Evaluate base model (no checkpoint)
-    CUDA_VISIBLE_DEVICES=0 python eval_single.py \
+    CUDA_VISIBLE_DEVICES=0 python eval_parking.py \
         --model Qwen/Qwen2.5-VL-3B-Instruct \
-        --dataset merged_dataset \
-        --output-file results/Qwen_3B_base_merged.json
+        --output-file results_parking/Qwen_3B_base.json
 """
 
 import os
 import sys
 import json
 import argparse
+import re
+import shutil
 from dataclasses import dataclass, asdict
 from typing import Optional, List
 from tqdm import tqdm
 
 import torch
-from datasets import load_dataset, load_from_disk
 from PIL import Image
 
 from unsloth import FastVisionModel
 
 
-# Dataset configurations
-DATASETS = {
-    "merged_dataset": {
-        "path": "/home/syx/robo2VLM/merged_dataset",
-        "split": "test",
-        "is_local": True,
-    },
-    "ERQA": {
-        "path": "FlagEval/ERQA",
-        "split": "test",
-        "is_local": False,
-    },
-    "CV-Bench": {
-        "path": "nyu-visionx/CV-Bench",
-        "split": "test",
-        "is_local": False,
-    },
-}
+# Examples output directory
+EXAMPLES_DIR = "/home/syx/robo2VLM/finetune_pipeline/parking_examples"
+
+
+# Parking benchmark configuration
+PARKING_BENCHMARK_DIR = "/home/syx/robo2VLM/finetune_pipeline/parking_benchmark"
+PARKING_DATASET_FILE = os.path.join(PARKING_BENCHMARK_DIR, "dataset", "vqa_items.jsonl")
 
 
 @dataclass
 class EvalResult:
     """Single evaluation result."""
+    item_id: str
     question: str
     correct_answer: str
     model_response: str
@@ -62,88 +51,93 @@ class EvalResult:
     choices: Optional[List[str]] = None
 
 
-def load_eval_dataset(dataset_name: str, max_samples: Optional[int] = None):
-    """Load evaluation dataset."""
-    if dataset_name not in DATASETS:
-        raise ValueError(f"Unknown dataset: {dataset_name}. Available: {list(DATASETS.keys())}")
+def load_parking_benchmark():
+    """Load parking benchmark dataset from JSONL file."""
+    items = []
+    with open(PARKING_DATASET_FILE, "r") as f:
+        for line in f:
+            if line.strip():
+                items.append(json.loads(line))
+    print(f"Loaded {len(items)} items from parking benchmark")
+    return items
 
-    config = DATASETS[dataset_name]
-    print(f"Loading dataset: {dataset_name} from {config['path']}")
 
-    if config["is_local"]:
-        dataset_dict = load_from_disk(config["path"])
-        dataset = dataset_dict[config["split"]]
+def get_model_short_name(model_name: Optional[str], checkpoint_path: Optional[str]) -> str:
+    """Get a short model name for organizing examples."""
+    if checkpoint_path:
+        # Extract from path like outputs/Qwen_Qwen2.5-VL-3B-Instruct_cot/10000samples/checkpoint-final
+        parts = checkpoint_path.split("/")
+        for i, p in enumerate(parts):
+            if p == "outputs" and i + 2 < len(parts):
+                model_part = parts[i + 1]  # e.g., Qwen_Qwen2.5-VL-3B-Instruct_cot
+                samples_part = parts[i + 2]  # e.g., 10000samples
+                return f"{model_part}_{samples_part}"
+        return checkpoint_path.replace("/", "_")
+    elif model_name:
+        # e.g., Qwen/Qwen2.5-VL-3B-Instruct -> Qwen_Qwen2.5-VL-3B-Instruct_0samples
+        return model_name.replace("/", "_") + "_0samples"
+    return "unknown_model"
+
+
+def save_example(item_id: str, image_path: str, question: str, model_name: str, response: str,
+                 correct_answer: str, is_correct: bool):
+    """Save an example to the parking_examples directory."""
+    # Create item directory
+    item_dir = os.path.join(EXAMPLES_DIR, item_id)
+    os.makedirs(item_dir, exist_ok=True)
+
+    # Copy image if not already there
+    dest_image = os.path.join(item_dir, "image.jpg")
+    if not os.path.exists(dest_image) and os.path.exists(image_path):
+        shutil.copy(image_path, dest_image)
+
+    # Save/update question file if not exists
+    question_file = os.path.join(item_dir, "question.txt")
+    if not os.path.exists(question_file):
+        with open(question_file, "w") as f:
+            f.write(f"Correct Answer: {correct_answer}\n\n")
+            f.write(question)
+
+    # Save model response
+    response_file = os.path.join(item_dir, f"response_{model_name}.txt")
+    with open(response_file, "w") as f:
+        f.write(f"Correct: {is_correct}\n")
+        f.write(f"Expected: {correct_answer}\n\n")
+        f.write(response)
+
+
+def format_parking_sample(item):
+    """Format a parking benchmark item for evaluation."""
+    question = item["question"]
+    choices = item["choices"]
+    correct_choice_id = item["correct_choice_id"]
+
+    # Build formatted question with choices
+    formatted_question = f"{question}\nChoices:\n"
+    choice_texts = []
+    for choice in choices:
+        formatted_question += f"{choice['id']}. {choice['text']}\n"
+        choice_texts.append(choice['text'])
+
+    # Load image - try both original and resized paths
+    image_path = item["image_path"]
+    # Convert path like "images/vqa/S1_3.jpg" to use resized version
+    if "images/vqa/" in image_path:
+        resized_path = image_path.replace("images/vqa/", "images/vqa_resized/")
+        full_path = os.path.join(PARKING_BENCHMARK_DIR, resized_path)
+        if not os.path.exists(full_path):
+            # Fallback to original path
+            full_path = os.path.join(PARKING_BENCHMARK_DIR, image_path)
     else:
-        dataset = load_dataset(config["path"], split=config["split"])
+        full_path = os.path.join(PARKING_BENCHMARK_DIR, image_path)
 
-    if max_samples and max_samples < len(dataset):
-        dataset = dataset.select(range(max_samples))
-
-    print(f"Loaded {len(dataset)} samples")
-    return dataset, dataset_name
-
-
-def format_sample(sample, dataset_name: str):
-    """Format sample based on dataset type."""
-    # Detect format based on columns
-    columns = set(sample.keys())
-
-    # merged_dataset format: question, choices, correct_answer, image
-    if "choices" in columns and "correct_answer" in columns:
-        question = sample["question"]
-        choices = sample["choices"]
-        correct_answer = sample["correct_answer"]
-        image = sample["image"]
-
-        formatted_question = f"{question}\nChoices:\n"
-        for i, choice in enumerate(choices):
-            formatted_question += f"{chr(65 + i)}. {choice}\n"
-
-        return {
-            "question": formatted_question,
-            "correct_answer": correct_answer,
-            "choices": choices,
-            "image": image,
-        }
-
-    # ERQA format: question with embedded choices, answer
-    elif "answer" in columns and "question" in columns:
-        question = sample["question"]
-        answer = sample.get("answer", sample.get("correct_answer", ""))
-        image = sample.get("image", sample.get("images", None))
-
-        # Handle image list
-        if isinstance(image, list) and len(image) > 0:
-            image = image[0]
-
-        return {
-            "question": question,
-            "correct_answer": str(answer),
-            "choices": None,
-            "image": image,
-        }
-
-    # CV-Bench format
-    elif "answer" in columns:
-        question = sample.get("question", sample.get("prompt", ""))
-        answer = sample["answer"]
-        image = sample.get("image", sample.get("images", None))
-
-        if isinstance(image, list) and len(image) > 0:
-            image = image[0]
-
-        return {
-            "question": question,
-            "correct_answer": str(answer),
-            "choices": None,
-            "image": image,
-        }
-
-    else:
-        raise ValueError(f"Unknown dataset format. Columns: {columns}")
-
-
-import re
+    return {
+        "item_id": item["item_id"],
+        "question": formatted_question,
+        "correct_answer": correct_choice_id,
+        "choices": choice_texts,
+        "image_path": full_path,
+    }
 
 
 def extract_cot_answer(model_response: str) -> str:
@@ -178,16 +172,11 @@ def extract_cot_answer(model_response: str) -> str:
 
 
 def extract_zero_shot_answer(model_response: str) -> str:
-    """Extract answer letter from zero-shot response.
-
-    Looks for the answer letter the model actually chose, not just any
-    occurrence of a letter in the text.
-    """
+    """Extract answer letter from zero-shot response."""
     response = model_response.strip()
     response_upper = response.upper()
 
     # If response starts with a letter A-E followed by punctuation/space, that's the answer
-    # e.g., "A. The robot is...", "B) Yes", "C"
     if response_upper and response_upper[0] in 'ABCDE':
         if len(response_upper) == 1 or response_upper[1] in '.):, \t\n':
             return response_upper[0]
@@ -210,28 +199,19 @@ def extract_zero_shot_answer(model_response: str) -> str:
     choice_pattern = r'(?:^|\n)\s*([A-E])[.\)]\s*\w'
     matches = re.findall(choice_pattern, response_upper, re.MULTILINE)
     if matches:
-        # Return the last one (usually the final answer after reasoning)
         return matches[-1]
 
     return ""
 
 
 def check_answer(model_response: str, correct_answer: str, mode: str = "zero_shot") -> bool:
-    """Check if model response matches correct answer.
-
-    Args:
-        model_response: Raw model output
-        correct_answer: Expected correct answer letter
-        mode: "zero_shot" or "cot" - determines how to extract answer from response
-    """
+    """Check if model response matches correct answer."""
     correct = correct_answer.strip().upper()
 
     if mode == "cot":
-        # Extract answer from CoT format
         extracted = extract_cot_answer(model_response)
         return extracted == correct
     else:
-        # Zero-shot mode: extract the answer letter the model chose
         extracted = extract_zero_shot_answer(model_response)
         return extracted == correct
 
@@ -239,20 +219,14 @@ def check_answer(model_response: str, correct_answer: str, mode: str = "zero_sho
 def evaluate(
     model_name: Optional[str],
     checkpoint_path: Optional[str],
-    dataset_name: str,
     output_file: str,
-    max_samples: Optional[int] = None,
     mode: str = "zero_shot",
 ):
-    """Evaluate model on dataset.
-
-    Args:
-        mode: "zero_shot" or "cot" - determines answer extraction method and max_new_tokens
-    """
+    """Evaluate model on parking benchmark."""
     print(f"\n{'='*60}")
     print(f"Model: {model_name or checkpoint_path}")
     print(f"Mode: {mode}")
-    print(f"Dataset: {dataset_name}")
+    print(f"Dataset: parking_benchmark")
     print(f"Output: {output_file}")
     print(f"GPU: {os.environ.get('CUDA_VISIBLE_DEVICES', 'all')}")
     print(f"{'='*60}\n")
@@ -276,25 +250,32 @@ def evaluate(
 
     FastVisionModel.for_inference(model)
 
-    # Load dataset
-    dataset, ds_name = load_eval_dataset(dataset_name, max_samples)
+    # Get model short name for saving examples
+    model_short_name = get_model_short_name(model_name, checkpoint_path)
+    print(f"Model short name for examples: {model_short_name}")
+
+    # Create examples directory
+    os.makedirs(EXAMPLES_DIR, exist_ok=True)
+
+    # Load parking benchmark
+    items = load_parking_benchmark()
 
     # Evaluate
     results = []
     correct_count = 0
 
-    for sample in tqdm(dataset, desc=f"Evaluating on {dataset_name}"):
+    for item in tqdm(items, desc="Evaluating on parking_benchmark"):
         try:
-            formatted = format_sample(sample, ds_name)
+            formatted = format_parking_sample(item)
 
-            # Skip if no image
-            if formatted["image"] is None:
+            # Check if image exists
+            if not os.path.exists(formatted["image_path"]):
+                print(f"Warning: Image not found: {formatted['image_path']}")
                 continue
 
             # Create message
             question_text = formatted["question"]
             if mode == "cot":
-                # Add CoT instruction to match training format
                 question_text = (
                     f"{formatted['question']}\n"
                     "Think step by step about this question. "
@@ -319,12 +300,14 @@ def evaluate(
                 add_generation_prompt=True,
             )
 
-            # Prepare image
-            image = formatted["image"]
-            if isinstance(image, str):
-                image = Image.open(image).convert("RGB")
-            elif not isinstance(image, Image.Image):
-                image = Image.fromarray(image).convert("RGB")
+            # Load and prepare image - resize to avoid token count issues
+            image = Image.open(formatted["image_path"]).convert("RGB")
+            # Resize large images to max 1024 on longest side
+            max_size = 1024
+            if max(image.size) > max_size:
+                ratio = max_size / max(image.size)
+                new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+                image = image.resize(new_size, Image.LANCZOS)
 
             # Tokenize
             inputs = tokenizer(
@@ -356,15 +339,27 @@ def evaluate(
                 correct_count += 1
 
             results.append(EvalResult(
-                question=formatted["question"][:500],  # Truncate for storage
+                item_id=formatted["item_id"],
+                question=formatted["question"][:500],
                 correct_answer=formatted["correct_answer"],
                 model_response=response,
                 is_correct=is_correct,
                 choices=formatted["choices"],
             ))
 
+            # Save example to parking_examples directory
+            save_example(
+                item_id=formatted["item_id"],
+                image_path=formatted["image_path"],
+                question=formatted["question"],
+                model_name=model_short_name,
+                response=response,
+                correct_answer=formatted["correct_answer"],
+                is_correct=is_correct,
+            )
+
         except Exception as e:
-            print(f"Error processing sample: {e}")
+            print(f"Error processing item {item.get('item_id', 'unknown')}: {e}")
             continue
 
     # Calculate accuracy
@@ -376,7 +371,7 @@ def evaluate(
     output_data = {
         "model": model_name or checkpoint_path,
         "checkpoint": checkpoint_path,
-        "dataset": dataset_name,
+        "dataset": "parking_benchmark",
         "mode": mode,
         "total_samples": len(results),
         "correct": correct_count,
@@ -400,13 +395,10 @@ def evaluate(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate a model on a dataset")
+    parser = argparse.ArgumentParser(description="Evaluate a model on parking benchmark")
     parser.add_argument("--model", type=str, help="Base model name (for base model evaluation)")
     parser.add_argument("--checkpoint", type=str, help="Checkpoint path (for finetuned model)")
-    parser.add_argument("--dataset", type=str, required=True, choices=list(DATASETS.keys()),
-                        help="Dataset to evaluate on")
     parser.add_argument("--output-file", type=str, required=True, help="Output JSON file")
-    parser.add_argument("--max-samples", type=int, help="Max samples to evaluate")
     parser.add_argument("--mode", type=str, default="zero_shot",
                         choices=["zero_shot", "cot"],
                         help="Evaluation mode: zero_shot (direct answer) or cot (chain-of-thought)")
@@ -419,9 +411,7 @@ def main():
     evaluate(
         model_name=args.model,
         checkpoint_path=args.checkpoint,
-        dataset_name=args.dataset,
         output_file=args.output_file,
-        max_samples=args.max_samples,
         mode=args.mode,
     )
 

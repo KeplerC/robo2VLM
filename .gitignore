@@ -224,3 +224,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+finetune_pipeline/parking*
+finetune_pipeline/results*
+finetune_pipeline/examples*

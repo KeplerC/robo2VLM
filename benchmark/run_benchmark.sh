@@ -27,24 +27,25 @@ SERVER_URL="http://localhost:${PORT}/v1"
 # Default model list (edit this to change models)
 DEFAULT_MODELS=(
     # Qwen 2.5 VL series
-    # "Qwen/Qwen2.5-VL-3B-Instruct:1"
+    # "Qwen/Qwen2.5-VL-3B-Instruct:8"
     # "Qwen/Qwen2.5-VL-7B-Instruct:4"
     # "Qwen/Qwen2.5-VL-32B-Instruct:8"
+    # "Qwen/Qwen2.5-VL-72B-Instruct:8"
     # Qwen3 VL series
-    "Qwen/Qwen3-VL-4B-Instruct:1"
-    "Qwen/Qwen3-VL-8B-Instruct:2"
-    "Qwen/Qwen3-VL-32B-Instruct:8"
+    # "Qwen/Qwen3-VL-4B-Instruct:4"
+    "Qwen/Qwen3-VL-4B-Instruct:8"
+    "Qwen/Qwen3-VL-4B-Thinking:8"
+    "Qwen/Qwen3-VL-8B-Instruct:8"
+    "Qwen/Qwen3-VL-8B-Thinking:8"
+    # "Qwen/Qwen3-VL-32B-Instruct:8"
     # Gemma 3 (multimodal)
-    "google/gemma-3-4b-it:1"
-    "google/gemma-3-12b-it:4"
-    # InternVL 3.5
-    "OpenGVLab/InternVL3_5-4B:1"
-    "OpenGVLab/InternVL3_5-8B:2"
-    # # Llama Vision
-    # "meta-llama/Llama-3.2-11B-Vision-Instruct:4"
-    # # LLaVA
-    # "llava-hf/llava-v1.6-mistral-7b-hf:2"
-    # "llava-hf/llava-v1.6-34b-hf:4"
+    # "google/gemma-3-4b-it:8"
+    # "google/gemma-3-12b-it:8"
+    # "meta-llama/Llama-3.2-11B-Vision-Instruct:8"
+    # "liuhaotian/llava-v1.5-13b:8"
+    # # InternVL 3.5
+    # "OpenGVLab/InternVL3_5-4B:1"
+    # "OpenGVLab/InternVL3_5-8B:2"
 )
 
 # Prompt types to test
@@ -181,6 +182,7 @@ start_server() {
         --host "$HOST_BIND" \
         --port "$PORT" \
         --tp "$tp" \
+        --mem-fraction-static 0.7 \
         > "$log_file" 2>&1 &
 
     local server_pid=$!

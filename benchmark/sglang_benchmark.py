@@ -114,16 +114,11 @@ Answer:"""
             letter = chr(ord('A') + i)
             formatted_choices += f" {letter}. {choice}"
 
-        return f"""Answer the following multiple choice question. First, analyze the image carefully and reason through the question step by step. Then provide your final answer.
+        return f"""Answer the following multiple choice question. Think step by step, then provide your final answer.
 
 Question: {question}{formatted_choices}
 
-Let me analyze this step by step:
-1. First, I'll examine what's shown in the image...
-2. Then, I'll consider each answer option...
-3. Based on my analysis...
-
-Reasoning:"""
+Think through this carefully, then end with "The answer is X" where X is A, B, C, D, or E."""
 
     @staticmethod
     def direct(question: str, choices: List[str]) -> str:
